@@ -11,7 +11,8 @@ import { OutputPass } from './vendor/postprocessing/OutputPass.js';
 import { RoomEnvironment } from './vendor/environments/RoomEnvironment.js';
 import { makeBooGhost, makeGhostShadow } from './ghost.js';
 import { buildFurniture, inferType, TYPES, WALL_TYPES } from './furniture.js';
-import { isScene, expandScene } from './layout.js';
+import { isScene, expandScene, SIZES, COLOURS } from './layout.js';
+import { analysePlan, planPreview, planToLevel, mapHelpers, findPath, WALL } from './floorplan.js';
 import { STYLES, pickStyle, decorate, glow, floorTexture, wallTexture, grainTexture } from './styles.js';
 
 const STYLE = pickStyle();
@@ -47,7 +48,7 @@ function cleanLevel(data) {
   const level = {
     room_name: String(data.room_name || 'Unnamed Haunt').slice(0, 60),
     vibe: String(data.vibe || 'Something stirs in the shadows.').slice(0, 200),
-    size: { width: num(s.width, 16, 10, 30), depth: num(s.depth, 16, 10, 30), height: num(s.height, 5, 3, 8) },
+    size: { width: num(s.width, 16, 10, data.plan_mode ? 90 : 30), depth: num(s.depth, 16, 10, data.plan_mode ? 90 : 30), height: num(s.height, 5, 3, 8) },
     palette: {
       floor: hex(p.floor, '#3b3355'), walls: hex(p.walls, '#5a4b8a'),
       accent: hex(p.accent, '#ff4d8d'), fog: hex(p.fog, '#1a1430'),
@@ -58,6 +59,7 @@ function cleanLevel(data) {
   };
   const names = ['Kurayami', 'Hollowmi', 'Shirei', 'Yurei-X', 'Onibi', 'Bakeneko-chan'];
   const W = level.size.width, D = level.size.depth;
+  if (Array.isArray(data.spawn)) level.spawn = [num(data.spawn[0], 0, -W / 2, W / 2), num(data.spawn[1], 0, -D / 2, D / 2)];
   for (const o of (Array.isArray(data.objects) ? data.objects : []).slice(0, data.expanded ? 120 : 20)) {
     if (!o || typeof o !== 'object') continue;
     const pos = Array.isArray(o.pos) && o.pos.length >= 2 ? o.pos : [0.5, 0.5];
@@ -267,10 +269,13 @@ let solids = [];       // { box: THREE.Box3, mesh } for collisions and bullet bl
 let haunts = [];       // haunted objects: { obj, mesh, light, shake }
 let half = { x: 8, z: 8 };
 
+let plan = null; // floor-plan mode: wall grid helpers (collision, pathfinding), else null
+
 function buildWorld(lv) {
   if (world) scene.remove(world);
   world = new THREE.Group(); scene.add(world);
   solids = []; haunts = [];
+  plan = lv.map ? mapHelpers(lv.map) : null;
   const { width: W, depth: D, height: H } = lv.size;
   half = { x: W / 2, z: D / 2 };
   const L = ST; // the visual style decides sky and light; the level decides colours and layout
@@ -302,7 +307,19 @@ function buildWorld(lv) {
   const wallMat = toon(ST.neon ? '#0a0716' : lv.palette.walls);
   const stripeMat = toon(lv.palette.accent, { emissive: lv.palette.accent, emissiveIntensity: LOWFX ? 0.6 : ST.stripeGlow });
   const T = 0.4;
-  for (const [x, z, w, d] of [[0, -D / 2, W + T, T], [0, D / 2, W + T, T], [-W / 2, 0, T, D], [W / 2, 0, T, D]]) {
+  if (plan) {
+    // floor plan: every wall from the drawing, as one instanced mesh (one draw call)
+    const rects = plan.wallRects();
+    const mat = ST.neon ? toon('#0a0716') : ST.realistic ? new THREE.MeshStandardMaterial({ color: lv.palette.walls, roughness: 0.9 }) : wallMat;
+    const walls = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, rects.length);
+    const m4 = new THREE.Matrix4();
+    rects.forEach((r, i) => walls.setMatrixAt(i, m4.compose(new THREE.Vector3(r.x, H / 2, r.z), new THREE.Quaternion(), new THREE.Vector3(r.w, H, r.d))));
+    walls.castShadow = walls.receiveShadow = true;
+    walls.computeBoundingSphere();
+    world.add(walls);
+    solids.push({ box: new THREE.Box3(), mesh: walls }); // blocks bullets and sight; movement uses the grid
+  }
+  for (const [x, z, w, d] of plan ? [] : [[0, -D / 2, W + T, T], [0, D / 2, W + T, T], [-W / 2, 0, T, D], [W / 2, 0, T, D]]) {
     const wall = outline(new THREE.Mesh(new THREE.BoxGeometry(w, H, d), ST.realistic ? new THREE.MeshStandardMaterial({ map: wallTexture(lv.palette.walls, Math.max(w, d), H), roughness: 0.9 }) : wallMat), 0.01);
     wall.position.set(x, H / 2, z); wall.castShadow = wall.receiveShadow = true;
     if (ST.neon) neonEdges(wall, lv.palette.accent, 1.1);
@@ -375,7 +392,8 @@ function neonEdges(mesh, color, k) {
 // ======================================================================
 // PLAYER + GUN
 // ======================================================================
-const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), hp: 100, armor: 100, onGround: true, dashT: 0, dashCd: 0, dashDir: new THREE.Vector3() };
+const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), hp: 100, armor: 100, onGround: true, dashT: 0, dashCd: 0, dashDir: new THREE.Vector3(), crouching: false, crouchK: 0 };
+const CROUCH_DROP = 0.6; // crouched eyes are 1.0 m up instead of 1.6 m
 const EYE = 1.6, RADIUS = 0.35, SPEED = 6, GRAV = 20;
 const keys = {};
 
@@ -474,8 +492,8 @@ const WAVES = 3;
 function startGame() {
   buildWorld(level);
   ghosts = []; orbs.length = 0;
-  player.pos.set(0, 0, half.z - 1.5);
-  player.vel.set(0, 0, 0); player.hp = 100; player.armor = 100; player.dashCd = 0; player.dashT = 0;
+  player.pos.set(level.spawn ? level.spawn[0] : 0, 0, level.spawn ? level.spawn[1] : half.z - 1.5);
+  player.vel.set(0, 0, 0); player.hp = 100; player.armor = 100; player.dashCd = 0; player.dashT = 0; player.crouching = false; player.crouchK = 0;
   camera.position.set(player.pos.x, EYE, player.pos.z);
   camera.rotation.set(0, 0, 0);
   Object.assign(weapon, { mag: weapon.size, reserve: weapon.maxReserve, reloadT: 0, fireCd: 0, recoil: 0, shooting: false, ads: false, adsT: 0 });
@@ -539,8 +557,9 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') reload();
   if (e.code === 'Space' && player.onGround) { player.vel.y = 7; player.onGround = false; }
   if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && player.dashCd <= 0) dash();
+  if (e.code === 'KeyC') player.crouching = true; // not Ctrl: Ctrl+W would close the browser tab
 });
-document.addEventListener('keyup', (e) => { keys[e.code] = false; });
+document.addEventListener('keyup', (e) => { keys[e.code] = false; if (e.code === 'KeyC') player.crouching = false; });
 document.addEventListener('mousedown', (e) => {
   if (!controls.isLocked) return;
   if (e.button === 0) weapon.shooting = true;
@@ -553,7 +572,7 @@ document.addEventListener('mouseup', (e) => {
 document.addEventListener('contextmenu', (e) => { if (game.running) e.preventDefault(); });
 
 controls.addEventListener('unlock', () => {
-  weapon.shooting = false; weapon.ads = false;
+  weapon.shooting = false; weapon.ads = false; player.crouching = false;
   if (game.running) { game.paused = true; show('pause'); }
 });
 controls.addEventListener('lock', () => { game.paused = false; show('hud'); });
@@ -595,7 +614,7 @@ function fire() {
   setTimeout(() => { flash.visible = false; flashLight.intensity = 0; }, 45);
 
   const moving = moveDir().lengthSq() > 0 || !player.onGround;
-  const spread = ((moving ? 0.035 : 0.006) + weapon.recoil * 0.004) * (1 - 0.8 * adsAmount());
+  const spread = ((moving ? 0.035 : 0.006) + weapon.recoil * 0.004) * (1 - 0.8 * adsAmount()) * (1 - 0.4 * player.crouchK);
   ray.setFromCamera(new THREE.Vector2((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread), camera);
   const targets = [...solids.map((s) => s.mesh), ...ghosts.filter((g) => g.state !== 'dead').flatMap((g) => [g.body, g.head])];
   const hit = ray.intersectObjects(targets, false)[0];
@@ -671,21 +690,22 @@ function updateFx(dt) {
 // UPDATE LOOP
 // ======================================================================
 const _box = new THREE.Box3();
-function collide(pos, feetY) {
+function collide(pos, feetY, R = RADIUS) {
   let ground = 0;
   for (const { box } of solids) {
-    if (pos.x > box.min.x - RADIUS && pos.x < box.max.x + RADIUS && pos.z > box.min.z - RADIUS && pos.z < box.max.z + RADIUS) {
+    if (pos.x > box.min.x - R && pos.x < box.max.x + R && pos.z > box.min.z - R && pos.z < box.max.z + R) {
       if (feetY >= box.max.y - 0.25) { ground = Math.max(ground, box.max.y); continue; } // standing on top
       if (feetY + 1.7 < box.min.y) continue;
-      const pushL = pos.x - (box.min.x - RADIUS), pushR = (box.max.x + RADIUS) - pos.x;
-      const pushB = pos.z - (box.min.z - RADIUS), pushF = (box.max.z + RADIUS) - pos.z;
+      const pushL = pos.x - (box.min.x - R), pushR = (box.max.x + R) - pos.x;
+      const pushB = pos.z - (box.min.z - R), pushF = (box.max.z + R) - pos.z;
       const m = Math.min(pushL, pushR, pushB, pushF);
       if (m === pushL) pos.x -= pushL; else if (m === pushR) pos.x += pushR;
       else if (m === pushB) pos.z -= pushB; else pos.z += pushF;
     }
   }
-  pos.x = clamp(pos.x, -half.x + RADIUS + 0.2, half.x - RADIUS - 0.2);
-  pos.z = clamp(pos.z, -half.z + RADIUS + 0.2, half.z - RADIUS - 0.2);
+  if (plan) plan.pushOut(pos, R); // floor plan: walls come from the drawing's grid
+  pos.x = clamp(pos.x, -half.x + R + 0.2, half.x - R - 0.2);
+  pos.z = clamp(pos.z, -half.z + R + 0.2, half.z - R - 0.2);
   return ground;
 }
 
@@ -695,8 +715,10 @@ function updatePlayer(dt) {
     player.dashT -= dt;
     player.pos.addScaledVector(player.dashDir, 22 * dt);
   } else {
-    player.pos.addScaledVector(dir, SPEED * (1 - 0.45 * adsAmount()) * dt);
+    player.pos.addScaledVector(dir, SPEED * (1 - 0.45 * adsAmount()) * (1 - 0.5 * player.crouchK) * dt);
   }
+  // crouch eases in and out over about a tenth of a second
+  player.crouchK += ((player.crouching ? 1 : 0) - player.crouchK) * Math.min(1, dt * 14);
   player.dashCd = Math.max(0, player.dashCd - dt);
   player.vel.y -= GRAV * dt;
   player.pos.y += player.vel.y * dt;
@@ -704,7 +726,7 @@ function updatePlayer(dt) {
   if (player.pos.y <= ground) { player.pos.y = ground; player.vel.y = 0; player.onGround = true; }
   else if (player.pos.y > ground + 0.05) player.onGround = false;
   const bob = player.onGround && dir.lengthSq() ? Math.sin(game.time * 12) * 0.03 : 0;
-  camera.position.set(player.pos.x, player.pos.y + EYE + bob, player.pos.z);
+  camera.position.set(player.pos.x, player.pos.y + EYE - CROUCH_DROP * player.crouchK + bob * (1 - 0.5 * player.crouchK), player.pos.z);
 }
 
 function updateWeapon(dt) {
@@ -757,12 +779,30 @@ function updateGhosts(dt) {
         gh.sees = dist < ENEMY_RANGE && canSee(gh.muzzle.getWorldPosition(_muzzle), chest());
       }
       // with a clear view, hover and drift sideways; otherwise float closer
+      // on a floor plan, a ghost that cannot see you finds its way round the walls
+      if (plan && !gh.sees) {
+        gh.pathT = (gh.pathT || 0) - dt;
+        if (gh.pathT <= 0 || !gh.path) {
+          gh.pathT = 0.6 + Math.random() * 0.3;
+          gh.path = findPath(plan.nav, plan.navCell(g.position.x, g.position.z), plan.navCell(player.pos.x, player.pos.z)) || [];
+          gh.pi = 0;
+        }
+        gh.lost = gh.path.length ? 0 : (gh.lost || 0) + dt;
+        while (gh.pi < gh.path.length) {
+          const [wx, wz] = plan.navWorld(gh.path[gh.pi]);
+          if (Math.hypot(wx - g.position.x, wz - g.position.z) > 0.35) { to.set(wx - g.position.x, 0, wz - g.position.z).normalize(); break; }
+          gh.pi++;
+        }
+      }
+      const phase = !!plan && !gh.sees && (gh.lost || 0) > 2;
+      if (phase !== !!gh.phasing) { gh.phasing = phase; gh.flashMat.transparent = phase; gh.flashMat.opacity = phase ? 0.45 : 1; }
       const holding = gh.sees && dist > 3 && dist < 13;
-      const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(Math.sin(gh.t * 1.3 + gh.phase) * (holding ? 1 : 0.7));
+      const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(Math.sin(gh.t * 1.3 + gh.phase) * (holding ? 1 : plan && !gh.sees ? 0.15 : 0.7));
       if (dist > 1.1) {
         const move = holding ? side.normalize().multiplyScalar(0.4) : to.add(side).normalize();
         g.position.addScaledVector(move, gh.speed * 0.8 * dt);
-        collide(g.position, 0);
+        // ghosts float over desks and chairs; a ghost that cannot find any way round phases through walls
+        if (!gh.phasing) collide(g.position, Math.max(0, g.position.y - 0.25), 0.25);
       }
       const hover = FLOAT_Y + (gh.boss ? 0.35 : 0);
       g.position.y += (hover + Math.sin(gh.t * 2.6 + gh.phase) * 0.12 - g.position.y) * Math.min(1, dt * 3);
@@ -795,7 +835,7 @@ function updateGhosts(dt) {
 const ENEMY_RANGE = 22, ORB_SPEED = 13;
 const losRay = new THREE.Raycaster();
 const _muzzle = new THREE.Vector3(), _chest = new THREE.Vector3(), _losDir = new THREE.Vector3();
-function chest() { return _chest.set(player.pos.x, player.pos.y + 1.2, player.pos.z); }
+function chest() { return _chest.set(player.pos.x, player.pos.y + 1.2 - 0.55 * player.crouchK, player.pos.z); } // crouched: hidden behind a desk
 function canSee(from, to) {
   const d = _losDir.subVectors(to, from).length();
   losRay.set(from, _losDir.divideScalar(d)); losRay.far = d - 0.3;
@@ -841,6 +881,7 @@ function updateOrbs(dt) {
     o.m.rotation.y += dt * 8;
     let done = o.left <= 0;
     if (!done && o.m.position.distanceTo(chest()) < 0.55) { hurt(o.dmg); done = true; }
+    if (!done && plan && plan.blockedAt(o.m.position.x, o.m.position.z)) done = true;
     if (!done) for (const { box } of solids) if (box.containsPoint(o.m.position)) { done = true; break; }
     if (done) { world.remove(o.m); orbs.splice(i, 1); }
   }
@@ -926,9 +967,10 @@ function drawRadar() {
   // floor, then objects and walls as seen from above
   radar.fillStyle = '#ffffff10';
   radar.fillRect(-half.x, -half.z, half.x * 2, half.z * 2);
+  if (plan) radar.drawImage(radarWalls(), -half.x, -half.z, half.x * 2, half.z * 2);
   const haunted = new Set(haunts.map((h) => h.collider));
   for (const { box, mesh } of solids) {
-    if (box.max.y - box.min.y < 0.05) continue; // the floor
+    if (box.isEmpty() || box.max.y - box.min.y < 0.05) continue; // the floor, or the plan's walls (drawn above)
     radar.fillStyle = haunted.has(mesh) ? '#ff7eb666' : '#c9d3df40';
     radar.fillRect(box.min.x, box.min.z, box.max.x - box.min.x, box.max.z - box.min.z);
     if (haunted.has(mesh)) { radar.strokeStyle = '#ff7eb6'; radar.lineWidth = 0.12; radar.strokeRect(box.min.x, box.min.z, box.max.x - box.min.x, box.max.z - box.min.z); }
@@ -970,6 +1012,19 @@ function adaptResolution(rawDt) {
     renderer.setPixelRatio(next);
     if (composer) composer.setPixelRatio(next);
   }
+}
+
+// the floor plan's walls as a small picture, made once per level for the radar
+let radarWallsCache = null;
+function radarWalls() {
+  if (radarWallsCache && radarWallsCache.level === level) return radarWallsCache.canvas;
+  const { grid, cols, rows } = level.map;
+  const c = document.createElement('canvas'); c.width = cols; c.height = rows;
+  const g = c.getContext('2d'), img = g.createImageData(cols, rows);
+  for (let i = 0; i < grid.length; i++) if (grid[i] === WALL) img.data.set([201, 211, 223, 200], i * 4);
+  g.putImageData(img, 0, 0);
+  radarWallsCache = { level, canvas: c };
+  return c;
 }
 
 let last = performance.now();
@@ -1044,11 +1099,20 @@ async function checkGemma() {
 }
 
 let photoData = null;
-function resizeImage(file) {
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('This browser cannot read that image. Try a JPG or PNG.'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function resizeImage(file, max = 768) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const max = 768, k = Math.min(1, max / Math.max(img.width, img.height));
+      const k = Math.min(1, max / Math.max(img.width, img.height));
       const c = document.createElement('canvas');
       c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
@@ -1060,10 +1124,14 @@ function resizeImage(file) {
   });
 }
 
+let photoFile = null;
+const planMode = () => document.querySelector('input[name="mode"]:checked').value === 'plan';
+
 async function takePhoto(file) {
   if (!file) return;
   try {
-    photoData = await resizeImage(file);
+    photoFile = file;
+    photoData = await resizeImage(file, planMode() ? 1280 : 768); // plans need sharper text for Gemma
     $('preview').src = photoData; $('drop').classList.add('has');
     $('fuse').disabled = false; setMsg('Photo ready. Press FUSE.');
   } catch (e) { setMsg(e.message, 'err'); }
@@ -1075,9 +1143,52 @@ drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.ad
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
 drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); takePhoto(e.dataTransfer.files[0]); });
 
+document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener('change', () => {
+  $('drop-text').textContent = planMode() ? 'Click or drop a floor plan here' : 'Click or drop a photo here';
+  if (photoFile) takePhoto(photoFile); // re-size for the new mode
+}));
+
+// Floor plan: walls come straight from the drawing (instant), Gemma reads the room names and scale.
+async function fusePlan() {
+  const plan = analysePlan(await loadImage(photoFile));
+  $('preview').src = planPreview(plan).toDataURL();
+  const hintWidth = /(\d+(?:\.\d+)?)\s*m\b/i.exec($('hint').value); // e.g. "26 m wide" overrides the scale
+  const t0 = performance.now();
+  const timer = setInterval(() => setMsg(`Walls traced. Gemma is reading the room names... ${Math.round((performance.now() - t0) / 1000)}s`, 'busy'), 500);
+  let info = null, note = '';
+  // the same plan loads instantly the second time (handy to prepare a live demo)
+  const cacheKey = `phantom-plan:${photoFile.name}:${photoFile.size}:${photoFile.lastModified}`;
+  try { info = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch { info = null; }
+  if (info) note = 'Room names from the last time you used this plan';
+  else try {
+    const res = await fetch('api/analyze', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: photoData, hint: $('hint').value, mode: 'plan' }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gemma failed');
+    info = data.level; note = `Read by ${data.model} in ${data.seconds}s`;
+    try { localStorage.setItem(cacheKey, JSON.stringify(info)); } catch { /* storage is optional */ }
+  } catch (e) {
+    note = `Gemma could not read the labels (${e.message}), so rooms are guessed from their size`;
+  }
+  clearInterval(timer);
+  const { level: raw, map } = planToLevel(plan, info, { SIZES, COLOURS, widthOverride: hintWidth && hintWidth[1] });
+  const lv = cleanLevel(raw);
+  Object.defineProperty(lv, 'map', { value: map, enumerable: false }); // big grid stays out of the JSON view
+  setMsg(`${note}. ${lv.objects.length} pieces of furniture in a ${Math.round(map.W)} x ${Math.round(map.D)} m floor.`);
+  openBriefing(lv);
+}
+
 $('fuse').addEventListener('click', async () => {
   if (!photoData) return;
   audio();
+  if (planMode()) {
+    $('fuse').disabled = true;
+    try { await fusePlan(); } catch (e) { setMsg(`${e.message}. You can still play a sample.`, 'err'); }
+    $('fuse').disabled = false;
+    return;
+  }
   $('fuse').disabled = true;
   const t0 = performance.now();
   const timer = setInterval(() => setMsg(`Gemma is reading your room... ${Math.round((performance.now() - t0) / 1000)}s`, 'busy'), 500);

@@ -25,6 +25,10 @@
         <div class="card main">
           <h2>01 &nbsp;Fuse a photo</h2>
           <p class="hint">Snap any room. Gemma 4 rebuilds it as an arena and hides ghosts inside real objects.</p>
+          <div class="modes" role="radiogroup" aria-label="What are you uploading?">
+            <label><input type="radio" name="mode" value="photo" checked> Room photo</label>
+            <label><input type="radio" name="mode" value="plan"> Floor plan</label>
+          </div>
           <label class="drop" id="drop">
             <input type="file" id="photo" accept="image/*">
             <img id="preview" alt="">
@@ -59,7 +63,7 @@
       <ul id="b-ghosts"></ul>
       <div class="controls">
         <span><b>WASD</b> move</span><span><b>Mouse</b> aim</span><span><b>Click</b> shoot</span><span><b>Right-click</b> aim down sights</span>
-        <span><b>R</b> reload</span><span><b>Shift</b> dash</span><span><b>Space</b> jump</span>
+        <span><b>R</b> reload</span><span><b>Shift</b> dash</span><span><b>Space</b> jump</span><span><b>C</b> crouch</span>
         <span><b>Head</b> = 2.5x damage</span>
       </div>
       <div class="row">

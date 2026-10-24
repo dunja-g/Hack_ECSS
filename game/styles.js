@@ -139,15 +139,18 @@ export function decorate(styleName, world, lv) {
     const panelMat = new THREE.MeshBasicMaterial({ color: glow('#f4f8ff', 1.25) });
     const lights = [];
     const nx = Math.max(2, Math.round(W / 5)), nz = Math.max(2, Math.round(D / 5));
+    const panelGeo = new THREE.BoxGeometry(1.2, 0.04, 0.3);
     for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
       const x = ((i + 0.5) / nx - 0.5) * W, z = ((j + 0.5) / nz - 0.5) * D;
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 0.3), panelMat);
+      const panel = new THREE.Mesh(panelGeo, panelMat);
       panel.position.set(x, H - 0.02, z); panel.raycast = () => {};
       world.add(panel);
-      if ((i + j) % 2 === 0 && lights.length < 6) {
-        const l = new THREE.PointLight('#fff6e6', 9, Math.max(W, D) * 0.8, 1.6);
-        l.position.set(x, H - 0.3, z); world.add(l); lights.push(l);
-      }
+    }
+    // six real lights spread evenly over the whole ceiling (big floor plans included)
+    const lx = Math.min(3, nx), lz = Math.max(1, Math.min(2, nz));
+    for (let i = 0; i < lx; i++) for (let j = 0; j < lz; j++) {
+      const l = new THREE.PointLight('#fff6e6', 9, Math.max(W / lx, D / lz) * 1.6, 1.6);
+      l.position.set(((i + 0.5) / lx - 0.5) * W, H - 0.3, ((j + 0.5) / lz - 0.5) * D); world.add(l); lights.push(l);
     }
     // one flickering light: something is wrong in here
     const flick = lights[lights.length - 1];

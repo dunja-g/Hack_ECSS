@@ -12,7 +12,7 @@ export const SIZES = {
   laptop: [0.34, 0.02, 0.24], tv: [1.2, 0.7, 0.06], lamp: [0.35, 1.6, 0.35], plant: [0.45, 1.1, 0.45],
   whiteboard: [2.4, 1.2, 0.03], door: [1.0, 2.1, 0.06], window: [1.4, 1.4, 0.05], box: [0.5, 0.5, 0.5],
 };
-const COLOURS = {
+export const COLOURS = {
   desk: '#c99a62', table: '#b98a58', chair: '#3a4a6b', sofa: '#6b7f99', bed: '#5b8cff', shelf: '#b07a45',
   cabinet: '#8b8f94', monitor: '#1d1f23', laptop: '#8d9096', tv: '#15171a', lamp: '#e8d9b0', plant: '#8a5a3c',
   whiteboard: '#f4f4f2', door: '#9a7b5a', window: '#dfefff', box: '#9a8f80',

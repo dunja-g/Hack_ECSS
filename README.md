@@ -74,6 +74,7 @@ python3 server/server.py        # Python 3.10+, no packages needed
 | R | Reload |
 | Shift | Dash (3 s cooldown) |
 | Space | Jump (you can stand on furniture) |
+| C (hold) | Crouch: slower but steadier aim, and a desk is enough cover from ghost orbs |
 
 Headshots do 2.5x damage. Ghosts sway side to side, so aim for the head. Three waves; the last one has a boss.
 
@@ -107,6 +108,16 @@ game/samples/             pre-built levels
 openwebui/                optional Open WebUI action
 scripts/mock_ollama.py    fake Gemma for testing without the model
 ```
+
+## Floor plan mode
+
+Pick **Floor plan** above the upload box and drop in an architectural floor plan (a clean PNG or PDF export works best, not a photo of a printout).
+
+1. The game traces the walls straight from the drawing's pixels, in well under a second: thick strokes are walls, while text, dimension lines, furniture outlines and dash-dot gridlines are filtered out.
+2. Gemma reads the room labels ("Open Study Space", "Meeting Room") and where they are.
+3. Each room is furnished from a template (study desks, meeting tables, cafe tables), and ghosts path-find through the doorways. A ghost that cannot find a way in phases through the wall.
+
+The scale comes from the drawing's wall thickness. If the size looks wrong, type the real width in the wish box, for example `26 m`. Gemma's reading is remembered per file, so the same plan loads instantly the second time.
 
 ## Testing without Gemma
 

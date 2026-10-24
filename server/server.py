@@ -30,6 +30,7 @@ GAME_DIR = Path(os.environ.get("GAME_DIR", HERE.parent / "game")).resolve()
 PORT = int(os.environ.get("PORT", "8081"))
 TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "600"))
 SYSTEM_PROMPT = (HERE / "prompt.txt").read_text(encoding="utf-8")
+PLAN_PROMPT = (HERE / "prompt_floorplan.txt").read_text(encoding="utf-8")
 
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 SHAPES = {"box", "cylinder", "sphere"}
@@ -103,6 +104,39 @@ def clean_scene(data):
     if not groups and not any(scene["walls"].values()):
         raise ValueError("model described an empty room")
     return scene
+
+
+def clean_plan(data):
+    """Gemma's reading of a floor plan: room labels with boxes, the building width, haunted kinds."""
+    if not isinstance(data, dict):
+        raise ValueError("model reply is not a JSON object")
+    text = lambda v, n: str(v)[:n] if v is not None else None
+    rooms = []
+    for r in (data.get("rooms") or [])[:16]:
+        box = r.get("box") if isinstance(r, dict) else None
+        if not (isinstance(box, list) and len(box) == 4):
+            continue
+        rooms.append({"name": text(r.get("name"), 40), "type": text(r.get("type"), 20),
+                      "box": [_num(v, 0, 0, 1) for v in box]})
+    haunted = []
+    for h in (data.get("haunted") or [])[:4]:
+        if isinstance(h, dict):
+            gh = h.get("ghost") if isinstance(h.get("ghost"), dict) else {}
+            haunted.append({"object": text(h.get("object"), 30), "ghost": {
+                "name": text(gh.get("name"), 30), "personality": text(gh.get("personality"), 100),
+                "hp": _num(gh.get("hp"), 100, 60, 200), "speed": _num(gh.get("speed"), 2.5, 1, 4)}})
+    palette = data.get("palette") or {}
+    return {
+        "room_name": text(data.get("room_name") or "The Haunted Floor", 60),
+        "vibe": text(data.get("vibe") or "Every room on this floor hides something.", 200),
+        "boss_line": text(data.get("boss_line") or "You should not have opened this door...", 140),
+        "building_width_m": _opt(data.get("building_width_m"), 8, 120),
+        "palette": {k: _hex(palette.get(k), d) for k, d in
+                    (("floor", "#9aa3a8"), ("walls", "#efede8"), ("accent", "#d0643a"), ("fog", "#dfe3e6"))},
+        "lighting": data.get("lighting") if data.get("lighting") in LIGHTING else "day",
+        "rooms": rooms,
+        "haunted": haunted,
+    }
 
 
 def clean_level(data):
@@ -209,8 +243,8 @@ def ollama_request(path, payload=None, timeout=10):
         return json.loads(resp.read().decode())
 
 
-def ask_gemma(image_b64, hint=""):
-    user_text = "Fuse this photo into a PHANTOM FUSION arena."
+def ask_gemma(image_b64, hint="", plan=False):
+    user_text = "Read this floor plan for a PHANTOM FUSION arena." if plan else "Fuse this photo into a PHANTOM FUSION arena."
     if hint:
         user_text += f" Player's wish for the arena: {hint[:200]}"
     payload = {
@@ -220,7 +254,7 @@ def ask_gemma(image_b64, hint=""):
         "think": False,
         "options": {"temperature": 0.5, "num_ctx": 8192},
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": PLAN_PROMPT if plan else SYSTEM_PROMPT},
             {"role": "user", "content": user_text, "images": [image_b64]},
         ],
     }
@@ -288,11 +322,12 @@ class Handler(SimpleHTTPRequestHandler):
 
         started = time.time()
         try:
-            raw = ask_gemma(image, str(body.get("hint", "")))
+            plan = body.get("mode") == "plan"
+            raw = ask_gemma(image, str(body.get("hint", "")), plan)
         except Exception as err:  # noqa: BLE001
             return self._json(502, {"error": f"could not reach Gemma at {OLLAMA_URL}: {err}"})
         try:
-            level = clean_level(extract_json(raw))
+            level = clean_plan(extract_json(raw)) if plan else clean_level(extract_json(raw))
         except Exception as err:  # noqa: BLE001
             return self._json(502, {"error": f"Gemma replied but the level was not usable: {err}", "raw": raw[:2000]})
         return self._json(200, {"level": level, "model": GEMMA_MODEL, "seconds": round(time.time() - started, 1)})

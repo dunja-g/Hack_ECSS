@@ -70,6 +70,12 @@ export function buildFurniture(o, kit) {
     case 'desk':
     case 'table': {
       const t = Math.min(0.05, h * 0.08);
+      if (o.type === 'table' && /round|cafe|café|bistro/.test(o.name.toLowerCase())) { // round cafe table on one post
+        cyl(w / 2, w / 2, t, main, 0, h - t / 2, 0);
+        cyl(0.04, 0.04, h - t, metal, 0, (h - t) / 2, 0, false);
+        cyl(w * 0.28, w * 0.3, 0.03, metal, 0, 0.015, 0, false);
+        break;
+      }
       box(w, t, d, main, 0, h - t / 2, 0);
       legs(h - t, 0.06, 0.05, o.type === 'desk' ? metal : dark);
       if (o.type === 'desk') box(w * 0.9, h * 0.4, 0.02, dark, 0, h * 0.55, -d / 2 + 0.06, false); // modesty panel
