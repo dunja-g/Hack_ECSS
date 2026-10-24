@@ -1,0 +1,21 @@
+{
+  "room_name": "B60: The Midnight Compile",
+  "vibe": "Rows of humming lab machines where crashed builds rise as neon spirits hungry for semicolons.",
+  "size": {"width": 22, "depth": 20, "height": 5},
+  "palette": {"floor": "#2b3a55", "walls": "#1d2440", "accent": "#00f0ff", "fog": "#0b1024"},
+  "lighting": "neon",
+  "objects": [
+    {"name": "lab bench row 1", "shape": "box", "pos": [0.3, 0.3], "size": [4.0, 0.9, 1.0], "color": "#4c6ef5", "haunted": false},
+    {"name": "lab bench row 2", "shape": "box", "pos": [0.7, 0.3], "size": [4.0, 0.9, 1.0], "color": "#4c6ef5", "haunted": false},
+    {"name": "server rack", "shape": "box", "pos": [0.9, 0.15], "size": [1.0, 2.2, 1.0], "color": "#212529", "haunted": true,
+     "ghost": {"name": "Segfault-hime", "personality": "cold, precise, crashes everything she touches", "hp": 160, "speed": 2.2}},
+    {"name": "printer", "shape": "box", "pos": [0.1, 0.15], "size": [1.0, 1.1, 0.8], "color": "#e9ecef", "haunted": true,
+     "ghost": {"name": "Paper Jam Oni", "personality": "furious and stuck in a loop", "hp": 100, "speed": 3.0}},
+    {"name": "projector screen", "shape": "box", "pos": [0.5, 0.05], "size": [4.0, 2.5, 0.2], "color": "#f8f9fa", "haunted": false},
+    {"name": "office chair", "shape": "cylinder", "pos": [0.45, 0.55], "size": [0.7, 1.0, 0.7], "color": "#ff6b6b", "haunted": true,
+     "ghost": {"name": "Swivelra", "personality": "lazy but spins wildly when angry", "hp": 90, "speed": 3.6}},
+    {"name": "water cooler", "shape": "cylinder", "pos": [0.85, 0.6], "size": [0.5, 1.4, 0.5], "color": "#74c0fc", "haunted": false},
+    {"name": "lab bench row 3", "shape": "box", "pos": [0.25, 0.7], "size": [3.0, 0.9, 1.0], "color": "#4c6ef5", "haunted": false}
+  ],
+  "boss_line": "Your code compiled... but you will NOT run!"
+}

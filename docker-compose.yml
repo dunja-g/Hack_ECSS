@@ -1,0 +1,56 @@
+# PHANTOM FUSION: three separate containers
+#   ollama      -> Gemma 4 "brain", exposed as an API on port 11434
+#   open-webui  -> chat UI that talks to the Gemma API (port 3000)
+#   game        -> the shooter + photo-to-level API (port 8081)
+#
+# Everything works offline once the images and the Gemma model are downloaded.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: phantom-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+      - ./ollama:/setup:ro
+      - ./server/prompt.txt:/setup/prompt.txt:ro
+    environment:
+      - OLLAMA_KEEP_ALIVE=30m
+      - GEMMA_MODEL=${GEMMA_MODEL:-gemma4:e4b-it-qat}
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: phantom-openwebui
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=${OLLAMA_URL:-http://ollama:11434}
+      - WEBUI_AUTH=False
+      - WEBUI_NAME=Phantom Fusion
+      - OFFLINE_MODE=True
+      - ENABLE_OPENAI_API=False
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - open-webui-data:/app/backend/data
+    restart: unless-stopped
+
+  game:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: phantom-game
+    ports:
+      - "8081:8081"
+    environment:
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - GEMMA_MODEL=${GEMMA_MODEL:-gemma4:e4b-it-qat}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
+  open-webui-data:

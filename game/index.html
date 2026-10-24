@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phantom Fusion</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <!-- ===== MENU ===== -->
+  <section id="menu" class="overlay">
+    <div class="menu-inner">
+      <header class="brand">
+        <h1>PHANTOM<span>FUSION</span></h1>
+        <p class="tag">Your room. Their haunt. Powered by Gemma 4.</p>
+        <p id="gemma-status" class="status"><i></i><span>Checking Gemma...</span></p>
+      </header>
+
+      <div class="cards">
+        <div class="card main">
+          <h2>01 &nbsp;Fuse a photo</h2>
+          <p class="hint">Snap any room. Gemma 4 rebuilds it as an arena and hides ghosts inside real objects.</p>
+          <label class="drop" id="drop">
+            <input type="file" id="photo" accept="image/*">
+            <img id="preview" alt="">
+            <span id="drop-text">Click or drop a photo here</span>
+          </label>
+          <input id="hint" type="text" maxlength="200" placeholder="Optional wish, e.g. 'make it neon and spooky'">
+          <button id="fuse" class="btn primary" disabled>FUSE WITH GEMMA</button>
+          <p id="fuse-msg" class="msg"></p>
+        </div>
+
+        <div class="card">
+          <h2>02 &nbsp;Try a sample</h2>
+          <p class="hint">Pre-built rooms, handy if Wi-Fi or Gemma is slow.</p>
+          <button class="btn" data-sample="samples/dorm.json">Student dorm</button>
+          <button class="btn" data-sample="samples/ecs-lab.json">B60 lab</button>
+
+          <h2 class="gap">03 &nbsp;Paste from Open WebUI</h2>
+          <textarea id="paste" placeholder="Paste Gemma's JSON reply here"></textarea>
+          <button id="load-paste" class="btn">LOAD JSON</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== BRIEFING ===== -->
+  <section id="briefing" class="overlay hidden">
+    <div class="brief-inner">
+      <p class="kicker">ARENA FUSED</p>
+      <h2 id="b-name"></h2>
+      <p id="b-vibe" class="vibe"></p>
+      <h3>Haunted objects</h3>
+      <ul id="b-ghosts"></ul>
+      <div class="controls">
+        <span><b>WASD</b> move</span><span><b>Mouse</b> aim</span><span><b>Click</b> shoot</span>
+        <span><b>R</b> reload</span><span><b>Shift</b> dash</span><span><b>Space</b> jump</span>
+        <span><b>Head</b> = 2.5x damage</span>
+      </div>
+      <div class="row">
+        <button id="enter" class="btn primary">ENTER THE HAUNT</button>
+        <button class="btn back">NEW PHOTO</button>
+      </div>
+      <details><summary>Level JSON</summary><pre id="b-json"></pre></details>
+    </div>
+  </section>
+
+  <!-- ===== PAUSE / END ===== -->
+  <section id="pause" class="overlay hidden">
+    <div class="brief-inner center">
+      <h2>PAUSED</h2>
+      <button id="resume" class="btn primary">RESUME</button>
+      <button class="btn back">QUIT TO MENU</button>
+    </div>
+  </section>
+  <section id="end" class="overlay hidden">
+    <div class="brief-inner center">
+      <p class="kicker" id="end-kicker">ROUND OVER</p>
+      <h2 id="end-title"></h2>
+      <div id="end-stats" class="stats"></div>
+      <button id="again" class="btn primary">PLAY AGAIN</button>
+      <button class="btn back">NEW PHOTO</button>
+    </div>
+  </section>
+
+  <!-- ===== HUD ===== -->
+  <div id="hud" class="hidden">
+    <div id="crosshair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="d"></i></div>
+    <div id="hitmarker"></div>
+    <div id="wave"><span id="wave-label">WAVE 1</span><small id="left">0 GHOSTS</small></div>
+    <div id="room-tag"></div>
+    <div id="feed"></div>
+    <div id="health"><b id="hp">100</b><div class="bar"><i id="hp-bar"></i></div></div>
+    <div id="ability"><span>SHIFT</span><div id="dash-ring"></div></div>
+    <div id="ammo"><b id="mag">25</b><small>/ &infin;</small><em id="reload">RELOADING</em></div>
+    <div id="shout"></div>
+    <div id="vignette"></div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
