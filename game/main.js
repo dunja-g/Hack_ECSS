@@ -8,6 +8,7 @@ import { EffectComposer } from './vendor/postprocessing/EffectComposer.js';
 import { RenderPass } from './vendor/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from './vendor/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from './vendor/postprocessing/OutputPass.js';
+import { RoomEnvironment } from './vendor/environments/RoomEnvironment.js';
 import { STYLES, pickStyle, decorate, glow, floorTexture, wallTexture, grainTexture } from './styles.js';
 
 const STYLE = pickStyle();
@@ -127,11 +128,12 @@ const canvas = $('view');
 // Add ?lowfx to the URL on a slow laptop: no shadows, lower resolution.
 const LOWFX = new URLSearchParams(location.search).has('lowfx');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: !LOWFX });
-renderer.setPixelRatio(LOWFX ? 1 : Math.min(window.devicePixelRatio, 2));
+const MAX_DPR = LOWFX ? 1 : Math.min(window.devicePixelRatio, 2);
+renderer.setPixelRatio(MAX_DPR);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = !LOWFX;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-if (ST.realistic) { renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.15; }
+if (ST.realistic) { renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.9; }
 document.body.classList.add('style-' + STYLE);
 
 const scene = new THREE.Scene();
@@ -140,10 +142,21 @@ camera.rotation.order = 'YXZ';
 scene.add(camera);
 const controls = new PointerLockControls(camera, document.body);
 
+// Soft studio reflections, so painted metal, plastic and wood read as real materials.
+if (ST.realistic) {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.12;
+  pmrem.dispose();
+}
+const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
+
 // Bloom (glow) post-processing. Turned off in ?lowfx mode.
 let composer = null;
 if (!LOWFX) {
-  composer = new EffectComposer(renderer);
+  // 4x MSAA inside the post-processing chain; without it, bloom turns antialiasing off
+  const rt = new THREE.WebGLRenderTarget(window.innerWidth * MAX_DPR, window.innerHeight * MAX_DPR, { type: THREE.HalfFloatType, samples: 4 });
+  composer = new EffectComposer(renderer, rt);
   composer.addPass(new RenderPass(scene, camera));
   composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), ST.bloom.strength, ST.bloom.radius, ST.bloom.threshold));
   composer.addPass(new OutputPass());
@@ -231,8 +244,10 @@ function buildWorld(lv) {
   const sun = new THREE.DirectionalLight(L.sun[0], L.sun[1]);
   sun.position.set(W * 0.3, 14, D * 0.2);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  Object.assign(sun.shadow.camera, { left: -W, right: W, top: D, bottom: -D, far: 50 });
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
+  const reach = Math.max(W, D) * 0.75; // fit the arena tightly for sharper shadows
+  Object.assign(sun.shadow.camera, { left: -reach, right: reach, top: reach, bottom: -reach, far: 50 });
   world.add(sun);
 
   // floor with a training-range grid
@@ -292,6 +307,8 @@ function buildWorld(lv) {
     }
   }
   worldUpdate = decorate(STYLE, world, lv);
+  // crisp floor tiles and wall textures at grazing angles
+  world.traverse((m) => { if (m.material && m.material.map) { m.material.map.anisotropy = MAX_ANISO; m.material.map.needsUpdate = true; } });
 }
 
 let worldUpdate = () => {};
@@ -305,7 +322,7 @@ function neonEdges(mesh, color, k) {
 // ======================================================================
 // PLAYER + GUN
 // ======================================================================
-const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), hp: 100, onGround: true, dashT: 0, dashCd: 0, dashDir: new THREE.Vector3() };
+const player = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), hp: 100, armor: 100, onGround: true, dashT: 0, dashCd: 0, dashDir: new THREE.Vector3() };
 const EYE = 1.6, RADIUS = 0.35, SPEED = 6, GRAV = 20;
 const keys = {};
 
@@ -348,7 +365,7 @@ gun.scale.setScalar(ST.realistic ? 0.8 : 0.45);
 gun.rotation.y = -0.04;
 camera.add(gun);
 
-const weapon = { mag: 30, size: 30, reloadT: 0, fireCd: 0, recoil: 0, shooting: false };
+const weapon = { mag: 30, size: 30, reserve: 90, maxReserve: 90, reloadT: 0, fireCd: 0, recoil: 0, shooting: false };
 
 // ======================================================================
 // GHOSTS
@@ -471,10 +488,10 @@ function startGame() {
   buildWorld(level);
   ghosts = [];
   player.pos.set(0, 0, half.z - 1.5);
-  player.vel.set(0, 0, 0); player.hp = 100; player.dashCd = 0; player.dashT = 0;
+  player.vel.set(0, 0, 0); player.hp = 100; player.armor = 100; player.dashCd = 0; player.dashT = 0;
   camera.position.set(player.pos.x, EYE, player.pos.z);
   camera.rotation.set(0, 0, 0);
-  Object.assign(weapon, { mag: weapon.size, reloadT: 0, fireCd: 0, recoil: 0, shooting: false });
+  Object.assign(weapon, { mag: weapon.size, reserve: weapon.maxReserve, reloadT: 0, fireCd: 0, recoil: 0, shooting: false });
   game.stats = { shots: 0, hits: 0, heads: 0, kills: 0, start: performance.now() };
   game.wave = 0; game.queue = []; game.betweenT = 1.5; game.running = true; game.paused = false; game.time = 0;
   $('room-tag').textContent = level.room_name.toUpperCase();
@@ -497,6 +514,7 @@ function nextWave() {
     shout(`WAVE ${n}`, 1500);
   }
   game.spawnT = 1.2;
+  weapon.reserve = weapon.maxReserve; // resupply between waves
   updateHud();
 }
 
@@ -546,7 +564,7 @@ controls.addEventListener('unlock', () => {
 controls.addEventListener('lock', () => { game.paused = false; show('hud'); });
 
 function reload() {
-  if (weapon.reloadT > 0 || weapon.mag === weapon.size) return;
+  if (weapon.reloadT > 0 || weapon.mag === weapon.size || weapon.reserve <= 0) return;
   weapon.reloadT = 1.4; sfx.reload();
   $('ammo').classList.add('reloading');
 }
@@ -613,6 +631,7 @@ function damageGhost(gh, head) {
     gh.state = 'dead'; gh.t = 0; game.stats.kills++;
     burst(gh.group.position.clone().setY(gh.soldier ? 1.2 : gh.group.position.y), gh.soldier ? 10 : gh.boss ? 40 : 20);
     sfx.kill(); feed(gh.name, head);
+    weapon.reserve = Math.min(weapon.maxReserve, weapon.reserve + 10); updateHud();
   }
 }
 
@@ -700,7 +719,7 @@ function updateWeapon(dt) {
   if (weapon.reloadT > 0) {
     weapon.reloadT -= dt;
     gun.rotation.x = -0.6 * Math.sin(Math.min(1, 1 - weapon.reloadT / 1.4) * Math.PI);
-    if (weapon.reloadT <= 0) { weapon.mag = weapon.size; gun.rotation.x = 0; $('ammo').classList.remove('reloading'); updateHud(); }
+    if (weapon.reloadT <= 0) { const take = Math.min(weapon.size - weapon.mag, weapon.reserve); weapon.mag += take; weapon.reserve -= take; gun.rotation.x = 0; $('ammo').classList.remove('reloading'); updateHud(); }
   } else if (weapon.shooting && weapon.fireCd <= 0 && weapon.mag > 0) {
     fire();
   }
@@ -818,7 +837,9 @@ function soldierShoot(gh, dist, dt) {
 
 function hurt(dmg) {
   if (player.hp <= 0) return;
-  player.hp = Math.max(0, player.hp - dmg);
+  const absorbed = Math.min(player.armor, dmg * 0.5); // armor soaks half of each hit
+  player.armor -= absorbed;
+  player.hp = Math.max(0, player.hp - (dmg - absorbed));
   sfx.hurt();
   const v = $('vignette'); v.classList.add('hurt'); setTimeout(() => v.classList.remove('hurt'), 120);
   updateHud();
@@ -859,7 +880,13 @@ function updateHud() {
   $('hp').textContent = Math.ceil(player.hp);
   $('hp-bar').style.width = player.hp + '%';
   $('health').classList.toggle('low', player.hp <= 30);
+  $('arm').textContent = Math.ceil(player.armor);
+  $('arm-bar').style.width = player.armor + '%';
+  $('armor').classList.toggle('empty', player.armor <= 0);
   $('mag').textContent = weapon.mag;
+  $('reserve').textContent = weapon.reserve;
+  $('ammo').classList.toggle('low', weapon.mag > 0 && weapon.mag <= 10);
+  $('ammo').classList.toggle('empty', weapon.mag === 0 && weapon.reserve === 0);
   $('wave-label').textContent = game.wave ? `WAVE ${game.wave} / ${WAVES}` : 'GET READY';
 }
 
@@ -870,9 +897,75 @@ function updateSparks(dt) {
   }
 }
 
+// ======================================================================
+// RADAR: top-left minimap that turns with the player, like CS
+// ======================================================================
+const radar = $('radar').getContext('2d');
+const RADAR_PX_PER_M = 11;
+const _look = new THREE.Vector3();
+function drawRadar() {
+  const c = radar.canvas, R = c.width / 2;
+  radar.setTransform(1, 0, 0, 1, 0, 0);
+  radar.clearRect(0, 0, c.width, c.height);
+  camera.updateMatrixWorld(); camera.getWorldDirection(_look);
+  radar.translate(R, R);
+  radar.rotate(-Math.PI / 2 - Math.atan2(_look.z, _look.x)); // the way you face is always up
+  radar.scale(RADAR_PX_PER_M, RADAR_PX_PER_M);
+  radar.translate(-player.pos.x, -player.pos.z);
+  // floor, then objects and walls as seen from above
+  radar.fillStyle = '#ffffff10';
+  radar.fillRect(-half.x, -half.z, half.x * 2, half.z * 2);
+  const haunted = new Set(haunts.map((h) => h.mesh));
+  for (const { box, mesh } of solids) {
+    if (box.max.y - box.min.y < 0.05) continue; // the floor
+    radar.fillStyle = haunted.has(mesh) ? '#ff7eb666' : '#c9d3df40';
+    radar.fillRect(box.min.x, box.min.z, box.max.x - box.min.x, box.max.z - box.min.z);
+    if (haunted.has(mesh)) { radar.strokeStyle = '#ff7eb6'; radar.lineWidth = 0.12; radar.strokeRect(box.min.x, box.min.z, box.max.x - box.min.x, box.max.z - box.min.z); }
+  }
+  // enemies: red dots, brighter when they have eyes on you
+  for (const gh of ghosts) {
+    if (gh.state === 'dead' || gh.state === 'gone') continue;
+    // anyone off the edge is pinned to the rim so you still know which way they are
+    let x = gh.group.position.x - player.pos.x, z = gh.group.position.z - player.pos.z;
+    const d = Math.hypot(x, z), edge = (R - 10) / RADAR_PX_PER_M, off = d > edge;
+    if (off) { x *= edge / d; z *= edge / d; }
+    radar.fillStyle = gh.sees ? '#ff4655' : '#ff465599';
+    radar.globalAlpha = off ? 0.6 : 1;
+    radar.beginPath(); radar.arc(player.pos.x + x, player.pos.z + z, (gh.boss ? 0.55 : 0.35) * (off ? 0.8 : 1), 0, Math.PI * 2); radar.fill();
+    radar.globalAlpha = 1;
+  }
+  // you: view cone and arrow, drawn upright in the middle
+  radar.setTransform(1, 0, 0, 1, R, R);
+  const cone = radar.createRadialGradient(0, 0, 0, 0, 0, R * 0.7);
+  cone.addColorStop(0, '#3ef2e055'); cone.addColorStop(1, '#3ef2e000');
+  radar.fillStyle = cone;
+  radar.beginPath(); radar.moveTo(0, 0); radar.arc(0, 0, R * 0.7, -Math.PI / 2 - 0.6, -Math.PI / 2 + 0.6); radar.closePath(); radar.fill();
+  radar.fillStyle = '#ffffff'; radar.strokeStyle = '#0b1118'; radar.lineWidth = 2;
+  radar.beginPath(); radar.moveTo(0, -11); radar.lineTo(8, 9); radar.lineTo(0, 4); radar.lineTo(-8, 9); radar.closePath(); radar.fill(); radar.stroke();
+}
+
+// Adaptive resolution: drop render scale when frames run slow, raise it back when there is headroom.
+const perf = { dpr: MAX_DPR, frames: 0, time: 0 };
+function adaptResolution(rawDt) {
+  perf.frames++; perf.time += rawDt;
+  if (perf.time < 2) return;
+  const ms = (perf.time / perf.frames) * 1000;
+  perf.frames = 0; perf.time = 0;
+  let next = perf.dpr;
+  if (ms > 21) next = Math.max(1, perf.dpr - 0.25);           // under ~48 fps
+  else if (ms < 12 && perf.dpr < MAX_DPR) next = Math.min(MAX_DPR, perf.dpr + 0.25);
+  if (next !== perf.dpr) {
+    perf.dpr = next;
+    renderer.setPixelRatio(next);
+    if (composer) composer.setPixelRatio(next);
+  }
+}
+
 let last = performance.now();
 function loop(now) {
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const rawDt = (now - last) / 1000;
+  const dt = Math.min(0.05, rawDt); last = now;
+  if (!document.hidden && rawDt < 0.5) adaptResolution(rawDt);
   if (game.running && !game.paused) {
     game.time += dt;
     updatePlayer(dt);
@@ -885,6 +978,7 @@ function loop(now) {
     worldUpdate(dt, game.time);
     $('ability').classList.toggle('cool', player.dashCd > 0);
     $('dash-ring').style.height = (player.dashCd / 3) * 100 + '%';
+    drawRadar();
   } else if (world && !game.running) {
     // slow orbit behind the menus
     game.time += dt;
@@ -1032,6 +1126,6 @@ if (!levelFromHash()) {
 
 // handy for testing in the browser console
 function step(dt) { // one logic tick without drawing (used by automated tests)
-  game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt); updateFx(dt); worldUpdate(dt, game.time);
+  game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt); updateFx(dt); worldUpdate(dt, game.time); drawRadar();
 }
-window.phantom = { game, player, camera, weapon, burst, STYLE, get ghosts() { return ghosts; }, get solids() { return solids; }, nextWave, startGame, cleanLevel, step };
+window.phantom = { game, player, camera, weapon, burst, STYLE, perf, renderer, get ghosts() { return ghosts; }, get solids() { return solids; }, nextWave, startGame, cleanLevel, step };

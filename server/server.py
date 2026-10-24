@@ -180,6 +180,11 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(GAME_DIR), **kwargs)
 
+    def end_headers(self):
+        # always revalidate, so "save then refresh" picks up edits to game files
+        self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     def log_message(self, fmt, *args):
         sys.stderr.write("[phantom] " + (fmt % args) + "\n")
 

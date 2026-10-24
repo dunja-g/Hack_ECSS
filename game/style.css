@@ -109,27 +109,46 @@ pre { max-height: 200px; overflow: auto; background: #00000055; padding: 10px; f
 #wave { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); text-align: center; background: #0f1923cc; padding: 6px 22px; border-bottom: 3px solid var(--red); }
 #wave span { display: block; font-size: 20px; letter-spacing: 2px; }
 #wave small { color: var(--muted); font-family: var(--body); font-size: 12px; letter-spacing: 2px; }
-#room-tag { position: absolute; top: 18px; left: 20px; font-size: 13px; letter-spacing: 2px; color: var(--paper); text-shadow: 0 2px 6px #000; max-width: 30vw; }
+#room-tag { margin-top: 8px; font-size: 11px; letter-spacing: 2px; color: var(--paper); text-shadow: 0 2px 6px #000; opacity: .85; }
 #feed { position: absolute; top: 18px; right: 20px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
 #feed div { background: #0f1923cc; padding: 6px 12px; font-size: 13px; border-right: 3px solid var(--cyan); animation: feed 3.5s forwards; font-family: var(--body); font-weight: 700; }
 #feed div.hs { border-color: var(--red); }
 #feed em { color: var(--red); font-style: normal; }
 @keyframes feed { 0% { opacity: 0; transform: translateX(20px); } 8%, 85% { opacity: 1; transform: none; } 100% { opacity: 0; } }
 
-#health { position: absolute; left: 24px; bottom: 22px; display: flex; align-items: center; gap: 12px; background: #0f1923cc; padding: 8px 16px; }
-#health b { font-size: 38px; min-width: 70px; }
-#health .bar { width: 160px; height: 8px; background: #ffffff22; }
-#health .bar i { display: block; height: 100%; width: 100%; background: var(--paper); transition: width .15s; }
-#health.low b { color: var(--red); }
-#health.low .bar i { background: var(--red); }
+/* CS-style vitals: HP and armor boxes, bottom-left */
+#vitals { position: absolute; left: 24px; bottom: 22px; display: flex; gap: 6px; }
+.vital { position: relative; display: flex; align-items: center; gap: 10px; min-width: 132px; padding: 8px 14px 12px;
+  background: linear-gradient(180deg, #0b1118b8, #0b1118e6); border: 1px solid #ffffff14; border-bottom: 2px solid #ffffff26;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.vital svg { width: 22px; height: 22px; fill: var(--paper); opacity: .9; flex: none; }
+.vital b { font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; text-shadow: 0 2px 8px #0009; }
+.vital .bar { position: absolute; left: 14px; right: 14px; bottom: 5px; height: 3px; background: #ffffff1c; }
+.vital .bar i { display: block; height: 100%; width: 100%; background: var(--paper); transition: width .15s; }
+#armor svg { fill: #8fc3ff; }
+#armor .bar i { background: #8fc3ff; }
+#armor.empty { opacity: .5; }
+.vital.low b, .vital.low svg { color: var(--red); fill: var(--red); }
+.vital.low .bar i { background: var(--red); }
+.vital.low { border-bottom-color: var(--red); animation: lowpulse 1s ease-in-out infinite; }
+@keyframes lowpulse { 50% { box-shadow: inset 0 0 24px #ff465555; } }
 
-#ability { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); width: 56px; height: 56px; display: grid; place-items: center; font-size: 10px; background: #0f1923cc; border: 2px solid var(--cyan); }
+/* radar, top-left */
+#minimap { position: absolute; top: 16px; left: 16px; width: 170px; }
+#radar { display: block; width: 170px; height: 170px; border-radius: 6px; border: 1px solid #ffffff1f;
+  background: #0b1118cc; box-shadow: 0 6px 24px #0007; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+
+#ability { position: relative; align-self: stretch; width: 56px; display: grid; place-items: center; font-size: 10px; background: #0f1923cc; border: 2px solid var(--cyan); }
 #ability.cool { border-color: #ffffff33; color: var(--muted); }
 #dash-ring { position: absolute; left: 0; bottom: 0; width: 100%; height: 0; background: #3ef2e033; }
 
-#ammo { position: absolute; right: 24px; bottom: 22px; background: #0f1923cc; padding: 8px 16px; text-align: right; }
-#ammo b { font-size: 38px; }
-#ammo small { color: var(--muted); margin-left: 6px; }
+#ammo { position: absolute; right: 24px; bottom: 22px; padding: 8px 16px 10px; text-align: right; min-width: 150px;
+  background: linear-gradient(180deg, #0b1118b8, #0b1118e6); border: 1px solid #ffffff14; border-bottom: 2px solid #ffffff26;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+#ammo b { font-size: 38px; line-height: 1; font-variant-numeric: tabular-nums; text-shadow: 0 2px 8px #0009; }
+#ammo small { color: var(--muted); margin-left: 6px; font-size: 18px; font-variant-numeric: tabular-nums; }
+#ammo.low b { color: #ffb347; }
+#ammo.empty b, #ammo.empty small { color: var(--red); }
 #ammo em { display: none; font-style: normal; color: var(--cyan); font-size: 12px; letter-spacing: 2px; }
 #ammo.reloading em { display: block; }
 #ammo.reloading b { color: var(--muted); }
@@ -143,3 +162,7 @@ pre { max-height: 200px; overflow: auto; background: #00000055; padding: 10px; f
 /* Neon style: CRT scanlines over the game */
 body.scanlines #hud::after { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px); mix-blend-mode: multiply; }
+
+/* tactical: soft lens vignette for depth (drawn by CSS, costs nothing on the GPU) */
+body.style-tactical #hud::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 55%, #0000004d 100%); }

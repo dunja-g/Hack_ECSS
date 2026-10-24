@@ -6,7 +6,7 @@ export const STYLES = {
   tactical: {
     label: 'Tactical',
     realistic: true, enemy: 'soldier', ceiling: true,
-    sky: ['#9aa6ae', '#d9dee2'], hemi: ['#ffffff', '#6e665c', 0.9], sun: ['#fff8ee', 1.1],
+    sky: ['#9aa6ae', '#d9dee2'], hemi: ['#ffffff', '#6e665c', 0.45], sun: ['#fff8ee', 1.1],
     fog: '#c4c9cd', fogNear: 22, fogFar: 3.5,
     outline: null, outlineMul: 0,
     bloom: { strength: 0.18, radius: 0.3, threshold: 1.0 },
