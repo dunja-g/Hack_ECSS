@@ -30,6 +30,9 @@ GitHub: https://github.com/dunja-g/Hack_ECSS (branch `main`, latest commit `dd2b
 | 11 | Crouch / 蹲下 | Hold C: lower view, steadier aim, and a desk is enough cover | 按住 C：視角變低、瞄準更穩，一張書桌就足以當掩體 |
 | 12 | Describe a room / 文字描述房間 | Type "two beds and three chairs" (English or Chinese); Gemma designs it and the game keeps exactly those counts | 輸入「兩張床和三把椅子」（中英文皆可）；Gemma 設計房間，遊戲會照你寫的數量擺放 |
 | 13 | Halloween start screen / 萬聖節開始畫面 | Spooky title font (bundled, works offline), moon, bats, cobwebs, a BOO ghost, jack-o'-lanterns, fog | 恐怖字體標題（已內建、可離線）、月亮、蝙蝠、蜘蛛網、BOO 鬼魂、南瓜燈、霧氣 |
+| 14 | Weapons / 武器 | 4 primaries (rifle, SMG, shotgun, sniper) picked on the briefing screen, a pistol, and a butterfly knife; switch with 1/2/3, Q or the wheel | 4 把主武器（步槍、SMG、霰彈槍、狙擊槍）在簡報畫面選擇，加上手槍和蝴蝶刀；用 1/2/3、Q 或滾輪切換 |
+| 15 | Butterfly knife / 蝴蝶刀 | Real balisong rig with a gloved hand; CS2-style draw, 5 s inspect (F), alternating slashes and a heavy stab | 真正的蝴蝶刀骨架和戴手套的手；CS2 風格的拔刀、5 秒檢視（F）、正反手揮砍和重刺 |
+| 16 | Halloween night / 萬聖節夜晚 | New default look: moonlight, fog, dying ceiling lights, a flashlight (L), jack-o'-lanterns, candles, cobwebs, wisps | 新的預設畫面：月光、霧氣、快壞掉的燈、手電筒（L）、南瓜燈、蠟燭、蜘蛛網、鬼火 |
 
 ---
 
@@ -63,6 +66,10 @@ docker compose up -d --build open-webui game
 | Shift | Dash | 衝刺 |
 | Space | Jump | 跳 |
 | C | Crouch (hold) | 蹲下（按住） |
+| 1 / 2 / 3 | Primary / pistol / butterfly knife | 主武器／手槍／蝴蝶刀 |
+| Q, wheel / 滾輪 | Last weapon, cycle weapons | 上一把武器、切換武器 |
+| F | Flip the butterfly knife (inspect) | 蝴蝶刀檢視翻刀 |
+| L | Flashlight | 手電筒 |
 
 ---
 
@@ -86,6 +93,7 @@ docker compose up -d --build open-webui game
 | `game/index.html` | Start screen, HUD, upload card | 開始畫面、HUD、上傳卡片 |
 | `game/main.js` | Game engine: world, player, weapon, ghosts, waves, radar | 遊戲引擎：世界、玩家、武器、鬼魂、波次、雷達 |
 | `game/ghost.js` | The BOO! ghost model | BOO! 鬼魂模型 |
+| `game/weapons.js` | Weapon stats and models, including the butterfly knife rig | 武器數值和模型，包括蝴蝶刀骨架 |
 | `game/furniture.js` | 16 furniture models, and guessing the type from a name | 16 種家具模型，以及從名稱判斷類型 |
 | `game/layout.js` | Room templates: turns Gemma's description into placed furniture | 房間範本：把 Gemma 的描述轉成擺好的家具 |
 | `game/floorplan.js` | Floor-plan mode: wall detection, rooms, pathfinding | 平面圖模式：牆壁偵測、房間、路徑規劃 |

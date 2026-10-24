@@ -84,8 +84,11 @@
       <div class="controls">
         <span><b>WASD</b> move</span><span><b>Mouse</b> aim</span><span><b>Click</b> shoot</span><span><b>Right-click</b> aim down sights</span>
         <span><b>R</b> reload</span><span><b>Shift</b> dash</span><span><b>Space</b> jump</span><span><b>C</b> crouch</span>
+        <span><b>1 2 3</b> gun / pistol / butterfly knife</span><span><b>Q</b> last weapon</span><span><b>Wheel</b> switch</span><span><b>F</b> flip the knife</span><span><b>L</b> flashlight</span>
         <span><b>Head</b> = 2.5x damage</span>
       </div>
+      <h3>Primary weapon</h3>
+      <div id="loadout" class="loadout" role="radiogroup" aria-label="Primary weapon"></div>
       <div class="row">
         <button id="enter" class="btn primary">ENTER THE HAUNT</button>
         <button class="btn back">NEW PHOTO</button>
@@ -131,7 +134,7 @@
       </div>
       <div id="ability"><span>SHIFT</span><div id="dash-ring"></div></div>
     </div>
-    <div id="ammo"><b id="mag">30</b><small>/ <span id="reserve">90</span></small><em id="reload">RELOADING</em></div>
+    <div id="ammo"><span id="wname"></span><b id="mag">30</b><small>/ <span id="reserve">90</span></small><em id="reload">RELOADING</em></div>
     <div id="shout"></div>
     <div id="vignette"></div>
   </div>

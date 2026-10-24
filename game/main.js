@@ -12,6 +12,7 @@ import { RoomEnvironment } from './vendor/environments/RoomEnvironment.js';
 import { makeBooGhost, makeGhostShadow } from './ghost.js';
 import { buildFurniture, inferType, TYPES, WALL_TYPES } from './furniture.js';
 import { isScene, expandScene, SIZES, COLOURS } from './layout.js';
+import { WEAPONS, PRIMARIES, buildWeapon } from './weapons.js';
 import { analysePlan, planPreview, planToLevel, mapHelpers, findPath, WALL } from './floorplan.js';
 import { STYLES, pickStyle, decorate, glow, floorTexture, wallTexture, grainTexture } from './styles.js';
 
@@ -149,7 +150,16 @@ function blip({ freq = 440, to = null, dur = 0.1, type = 'sine', vol = 0.2, nois
   } catch { /* audio is optional */ }
 }
 const sfx = {
-  shot: () => blip({ noise: true, freq: 1400, dur: 0.09, vol: 0.35 }),
+  shot: (kind = 'rifle') => ({
+    rifle: () => blip({ noise: true, freq: 1400, dur: 0.09, vol: 0.35 }),
+    smg: () => blip({ noise: true, freq: 1900, dur: 0.06, vol: 0.26 }),
+    shotgun: () => { blip({ noise: true, freq: 600, dur: 0.24, vol: 0.5 }); blip({ freq: 90, to: 40, dur: 0.2, type: 'sine', vol: 0.3 }); },
+    sniper: () => { blip({ noise: true, freq: 900, dur: 0.32, vol: 0.5 }); blip({ freq: 70, to: 30, dur: 0.35, type: 'sine', vol: 0.35 }); },
+    pistol: () => blip({ noise: true, freq: 2200, dur: 0.07, vol: 0.3 }),
+  }[kind] || (() => {}))(),
+  swish: () => blip({ noise: true, freq: 3200, dur: 0.12, vol: 0.14 }),
+  click: () => { blip({ freq: 2600, dur: 0.025, type: 'square', vol: 0.05 }); blip({ freq: 4200, dur: 0.02, type: 'triangle', vol: 0.04 }); }, // balisong latch
+  draw: () => blip({ freq: 520, to: 940, dur: 0.07, type: 'triangle', vol: 0.06 }),
   hit: () => blip({ freq: 900, dur: 0.05, type: 'square', vol: 0.08 }),
   head: () => blip({ freq: 1800, to: 2400, dur: 0.12, type: 'triangle', vol: 0.18 }),
   kill: () => blip({ freq: 700, to: 90, dur: 0.45, type: 'sawtooth', vol: 0.12 }),
@@ -172,7 +182,7 @@ renderer.setPixelRatio(MAX_DPR);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = !LOWFX;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-if (ST.realistic) { renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.9; }
+if (ST.realistic) { renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = ST.dark ? 1.05 : 0.9; }
 document.body.classList.add('style-' + STYLE);
 
 const scene = new THREE.Scene();
@@ -185,7 +195,7 @@ const controls = new PointerLockControls(camera, document.body);
 if (ST.realistic) {
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environmentIntensity = 0.12;
+  scene.environmentIntensity = ST.dark ? 0.03 : 0.12; // after dark, almost no bounce light
   pmrem.dispose();
 }
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
@@ -278,6 +288,8 @@ function buildWorld(lv) {
   plan = lv.map ? mapHelpers(lv.map) : null;
   const { width: W, depth: D, height: H } = lv.size;
   half = { x: W / 2, z: D / 2 };
+  // after dark the room's own colours read much deeper
+  const night = (hex) => ST.dark ? '#' + new THREE.Color(hex).multiplyScalar(0.55).getHexString() : hex;
   const L = ST; // the visual style decides sky and light; the level decides colours and layout
 
   scene.background = skyTexture(L.sky[0], L.sky[1]);
@@ -293,7 +305,7 @@ function buildWorld(lv) {
   world.add(sun);
 
   // floor with a training-range grid
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D), ST.realistic ? new THREE.MeshStandardMaterial({ map: floorTexture(lv.palette.floor, W, D), roughness: 0.6 }) : toon(ST.neon ? '#05030c' : lv.palette.floor));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D), ST.realistic ? new THREE.MeshStandardMaterial({ map: floorTexture(night(lv.palette.floor), W, D), roughness: ST.dark ? 0.45 : 0.6 }) : toon(ST.neon ? '#05030c' : lv.palette.floor));
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; floor.userData.solid = true;
   world.add(floor);
   solids.push({ box: new THREE.Box3().setFromObject(floor), mesh: floor });
@@ -310,7 +322,7 @@ function buildWorld(lv) {
   if (plan) {
     // floor plan: every wall from the drawing, as one instanced mesh (one draw call)
     const rects = plan.wallRects();
-    const mat = ST.neon ? toon('#0a0716') : ST.realistic ? new THREE.MeshStandardMaterial({ color: lv.palette.walls, roughness: 0.9 }) : wallMat;
+    const mat = ST.neon ? toon('#0a0716') : ST.realistic ? new THREE.MeshStandardMaterial({ color: night(lv.palette.walls), roughness: 0.9 }) : wallMat;
     const walls = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, rects.length);
     const m4 = new THREE.Matrix4();
     rects.forEach((r, i) => walls.setMatrixAt(i, m4.compose(new THREE.Vector3(r.x, H / 2, r.z), new THREE.Quaternion(), new THREE.Vector3(r.w, H, r.d))));
@@ -320,7 +332,7 @@ function buildWorld(lv) {
     solids.push({ box: new THREE.Box3(), mesh: walls }); // blocks bullets and sight; movement uses the grid
   }
   for (const [x, z, w, d] of plan ? [] : [[0, -D / 2, W + T, T], [0, D / 2, W + T, T], [-W / 2, 0, T, D], [W / 2, 0, T, D]]) {
-    const wall = outline(new THREE.Mesh(new THREE.BoxGeometry(w, H, d), ST.realistic ? new THREE.MeshStandardMaterial({ map: wallTexture(lv.palette.walls, Math.max(w, d), H), roughness: 0.9 }) : wallMat), 0.01);
+    const wall = outline(new THREE.Mesh(new THREE.BoxGeometry(w, H, d), ST.realistic ? new THREE.MeshStandardMaterial({ map: wallTexture(night(lv.palette.walls), Math.max(w, d), H), roughness: 0.9 }) : wallMat), 0.01);
     wall.position.set(x, H / 2, z); wall.castShadow = wall.receiveShadow = true;
     if (ST.neon) neonEdges(wall, lv.palette.accent, 1.1);
     world.add(wall); solids.push({ box: new THREE.Box3().setFromObject(wall), mesh: wall });
@@ -370,7 +382,7 @@ function buildWorld(lv) {
     if (ST.labels !== false) world.add(label);
 
     if (o.haunted) {
-      const light = new THREE.PointLight(ST.realistic ? '#cfe0ff' : '#b06bff', 2.5, 5);
+      const light = new THREE.PointLight(ST.dark ? '#9b6bff' : ST.realistic ? '#cfe0ff' : '#b06bff', 2.5, 5); // haunted things glow
       light.position.set(x, top + 0.6, z);
       world.add(light);
       haunts.push({ obj: o, mesh: root, collider, light, base: root.position.clone(), shake: 0 });
@@ -397,51 +409,72 @@ const CROUCH_DROP = 0.6; // crouched eyes are 1.0 m up instead of 1.6 m
 const EYE = 1.6, RADIUS = 0.35, SPEED = 6, GRAV = 20;
 const keys = {};
 
-const gun = new THREE.Group();
-(() => {
-  const body = outline(new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.13, 0.55), toon('#ece8e1')), 0.06);
-  const grip = outline(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.08), toon('#2a2f45')), 0.08);
-  grip.position.set(0, -0.12, 0.12); grip.rotation.x = 0.3;
-  const barrel = outline(new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.3, 10), toon('#2a2f45')), 0.1);
-  barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.02, -0.4);
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.102, 0.03, 0.4), toon('#ff4655', { emissive: '#ff4655', emissiveIntensity: 0.5 }));
-  stripe.position.set(0, 0.03, -0.02);
-  if (ST.realistic) {
-    const M = (c, r = 0.45, mt = 0.5) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: mt });
-    const dark = M('#1c1e22'), mid = M('#2c2f35'), rub = M('#121315', 0.85, 0.1);
-    const B = (w, h, d, m, x, y, z, rx = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.x = rx; gun.add(b); };
-    const C = (r, l, m, x, y, z) => { const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, 14), m); c.rotation.x = Math.PI / 2; c.position.set(x, y, z); gun.add(c); };
-    B(0.07, 0.11, 0.42, dark, 0, 0, 0);            // receiver
-    B(0.078, 0.088, 0.34, mid, 0, -0.005, -0.36);   // handguard
-    C(0.014, 0.26, dark, 0, 0.005, -0.64);          // barrel
-    C(0.021, 0.07, dark, 0, 0.005, -0.79);          // muzzle
-    B(0.05, 0.2, 0.09, rub, 0, -0.15, -0.08, 0.25); // magazine
-    B(0.045, 0.14, 0.06, rub, 0, -0.12, 0.13, -0.35); // grip
-    B(0.05, 0.1, 0.26, mid, 0, -0.02, 0.34);        // stock
-    B(0.03, 0.016, 0.36, dark, 0, 0.062, -0.12);    // rail
-    C(0.026, 0.2, dark, 0, 0.1, -0.06);             // scope
-    B(0.02, 0.04, 0.02, dark, 0, 0.075, -0.12); B(0.02, 0.04, 0.02, dark, 0, 0.075, 0.0);
-  } else gun.add(body, grip, barrel, stripe);
-  gun.traverse((m) => { m.raycast = () => {}; });
+// ======================================================================
+// WEAPONS: a primary (rifle, SMG, shotgun or sniper), a pistol and a butterfly knife
+// ======================================================================
+const weaponKit = (() => {
+  const palette = ST.realistic
+    ? { dark: '#1c1e22', mid: '#2c2f35', rubber: '#121315', wood: '#6b4527', lens: '#ff3b3b', steel: '#c9d0d6', edge: '#f4f7fa', handle: '#8a1d2c', handle2: '#1e2026', glove: '#18191c' }
+    : { dark: '#2a2f45', mid: '#ece8e1', rubber: '#2a2f45', wood: '#b8743a', lens: '#ff4655', steel: '#e8eef2', edge: '#ffffff', handle: '#ff4655', handle2: '#2a2f45', glove: '#2a2f45' };
+  const look = { steel: [0.22, 0.95], edge: [0.12, 1], rubber: [0.85, 0.1], wood: [0.7, 0.05], mid: [0.4, 0.6], dark: [0.45, 0.5], lens: [0.3, 0],
+    handle: [0.45, 0.35], handle2: [0.45, 0.35], glove: [0.9, 0.05] };
+  const cache = {};
+  return {
+    mat: (name) => cache[name] || (cache[name] = ST.realistic
+      ? new THREE.MeshStandardMaterial({ color: palette[name], roughness: look[name][0], metalness: look[name][1], emissive: name === 'lens' ? palette.lens : '#000000', emissiveIntensity: name === 'lens' ? (ST.dark ? 0.35 : 1.2) : 0 })
+      : toon(palette[name], name === 'lens' ? { emissive: palette.lens, emissiveIntensity: 0.6 } : {})),
+    edge: (m) => outline(m, 0.06),
+  };
 })();
-const flash = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: glow('#fff3a0', LOWFX ? 1 : 4) }));
-flash.position.set(0, 0.02, -0.58); flash.visible = false; flash.raycast = () => {};
-const flashLight = new THREE.PointLight('#ffd27a', 0, 6);
-flashLight.position.copy(flash.position);
-gun.add(flash, flashLight);
-if (ST.realistic) flash.position.set(0, 0.005, -0.84);
-const GUN_REST = ST.realistic ? new THREE.Vector3(0.2, -0.21, -0.42) : new THREE.Vector3(0.17, -0.16, -0.36);
-// aim down sights: the scoped rifle comes up to the eye, other guns move to the centre
-const GUN_ADS = ST.realistic ? new THREE.Vector3(0, -0.085, -0.3) : new THREE.Vector3(0, -0.2, -0.36);
-const ADS_FOV = ST.realistic ? 34 : 55, BASE_FOV = 75;
-const _gunPos = new THREE.Vector3();
-gun.position.copy(GUN_REST);
-gun.scale.setScalar(ST.realistic ? 0.8 : 0.45);
-gun.rotation.y = -0.04;
-camera.add(gun);
+const viewModels = {};
+for (const id of Object.keys(WEAPONS)) {
+  const vm = buildWeapon(id, weaponKit);
+  vm.holder = new THREE.Group(); vm.holder.add(vm.group); vm.holder.visible = false; vm.holder.scale.setScalar(0.8);
+  camera.add(vm.holder); viewModels[id] = vm;
+}
+let gun = viewModels.rifle.holder; // whatever is in your hand
 
-const weapon = { mag: 30, size: 30, reserve: 90, maxReserve: 90, reloadT: 0, fireCd: 0, recoil: 0, shooting: false, ads: false, adsT: 0 };
+// flashlight (dark styles): a warm beam from your shoulder that casts real shadows. L toggles it.
+const torch = new THREE.SpotLight('#ffe6c4', ST.dark ? 26 : 0, 26, 0.48, 0.55, 1.6);
+torch.position.set(-0.22, 0.06, 0.12); // left shoulder, so your own weapon stays out of the beam
+torch.target.position.set(0.05, -0.1, -4);
+torch.castShadow = ST.dark && !LOWFX; torch.shadow.mapSize.set(1024, 1024); torch.shadow.bias = -0.0005; torch.shadow.camera.near = 0.2;
+camera.add(torch, torch.target);
+let torchOn = !!ST.dark;
+const flash = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: glow('#fff3a0', LOWFX ? 1 : 4) }));
+flash.visible = false; flash.raycast = () => {};
+const flashLight = new THREE.PointLight('#ffd27a', 0, 6);
+const BASE_FOV = 75;
+const _gunPos = new THREE.Vector3();
+
+let savedPrimary = 'rifle';
+try { savedPrimary = PRIMARIES.includes(localStorage.getItem('phantom-primary')) ? localStorage.getItem('phantom-primary') : 'rifle'; } catch { /* storage is optional */ }
+const weapon = { id: 'knife', primary: savedPrimary, last: 'pistol', mag: 0, size: 0, reserve: 0, maxReserve: 0, reloadT: 0, fireCd: 0, recoil: 0,
+  shooting: false, pull: false, ads: false, adsT: 0, drawT: 0, knifeAnim: null, backhand: false, ammo: {} };
 const adsAmount = () => weapon.adsT * weapon.adsT * (3 - 2 * weapon.adsT); // eased 0..1
+const stats = () => WEAPONS[weapon.id];
+
+function equip(id) {
+  if (weapon.id === id && gun.visible) return;
+  if (!WEAPONS[weapon.id].melee) weapon.ammo[weapon.id] = { mag: weapon.mag, reserve: weapon.reserve }; // keep each gun's ammo
+  if (weapon.id !== id) weapon.last = weapon.id;
+  gun.visible = false;
+  const s = WEAPONS[id], vm = viewModels[id];
+  weapon.id = id; gun = vm.holder; gun.visible = true;
+  vm.group.add(flash, flashLight); flash.position.copy(vm.muzzle); flashLight.position.copy(vm.muzzle);
+  const a = weapon.ammo[id] || { mag: s.mag || 0, reserve: s.reserve || 0 };
+  Object.assign(weapon, { mag: a.mag, size: s.mag || 0, reserve: a.reserve, maxReserve: s.reserve || 0, reloadT: 0, fireCd: 0, adsT: 0,
+    drawT: s.melee ? 0.55 : 0.32, knifeAnim: s.melee ? { name: 'draw', t: 0, fired: 0 } : null });
+  $('ammo').classList.remove('reloading'); sfx.draw(); updateHud();
+}
+function resetLoadout() {
+  weapon.ammo = {};
+  for (const id of [weapon.primary, 'pistol']) weapon.ammo[id] = { mag: WEAPONS[id].mag, reserve: WEAPONS[id].reserve };
+  weapon.id = 'knife'; gun.visible = false; // so equip() does not store stale ammo
+  equip(weapon.primary);
+  weapon.last = 'pistol';
+}
+const slotOrder = () => [weapon.primary, 'pistol', 'knife'];
 
 // ======================================================================
 // GHOSTS
@@ -451,7 +484,7 @@ const FLOAT_Y = 1.0; // how high a ghost's middle floats above the floor
 
 function makeGhost(haunt, { boss = false, hpMul = 1, speedMul = 1 } = {}) {
   const g = haunt.obj.ghost;
-  const m = makeBooGhost({ boss, glow: ST.realistic ? 0.22 : 0.45 });
+  const m = makeBooGhost({ boss, glow: ST.ghostGlow ?? (ST.realistic ? 0.22 : 0.45) });
   const maxHp = g.hp * hpMul * (boss ? 3 : 1);
   const ghost = {
     ...m, name: boss ? `${g.name} (BOSS)` : g.name, hp: maxHp, maxHp,
@@ -496,7 +529,8 @@ function startGame() {
   player.vel.set(0, 0, 0); player.hp = 100; player.armor = 100; player.dashCd = 0; player.dashT = 0; player.crouching = false; player.crouchK = 0;
   camera.position.set(player.pos.x, EYE, player.pos.z);
   camera.rotation.set(0, 0, 0);
-  Object.assign(weapon, { mag: weapon.size, reserve: weapon.maxReserve, reloadT: 0, fireCd: 0, recoil: 0, shooting: false, ads: false, adsT: 0 });
+  Object.assign(weapon, { recoil: 0, shooting: false, pull: false, ads: false, adsT: 0 });
+  resetLoadout();
   game.stats = { shots: 0, hits: 0, heads: 0, kills: 0, start: performance.now() };
   game.wave = 0; game.queue = []; game.betweenT = 1.5; game.running = true; game.paused = false; game.time = 0;
   $('room-tag').textContent = level.room_name.toUpperCase();
@@ -519,6 +553,7 @@ function nextWave() {
     shout(`WAVE ${n}`, 1500);
   }
   game.spawnT = 1.2;
+  for (const [id, a] of Object.entries(weapon.ammo)) a.reserve = WEAPONS[id].reserve;
   weapon.reserve = weapon.maxReserve; // resupply between waves
   updateHud();
 }
@@ -558,11 +593,22 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && player.onGround) { player.vel.y = 7; player.onGround = false; }
   if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && player.dashCd <= 0) dash();
   if (e.code === 'KeyC') player.crouching = true; // not Ctrl: Ctrl+W would close the browser tab
+  if (e.code === 'Digit1') equip(weapon.primary);
+  if (e.code === 'Digit2') equip('pistol');
+  if (e.code === 'Digit3') equip('knife');
+  if (e.code === 'KeyQ') equip(weapon.last);
+  if (e.code === 'KeyL' && ST.dark) { torchOn = !torchOn; torch.intensity = torchOn ? 26 : 0; sfx.click(); }
+  if (e.code === 'KeyF' && stats().melee && (!weapon.knifeAnim || weapon.knifeAnim.name === 'idle')) weapon.knifeAnim = { name: 'inspect', t: 0, fired: 0 };
 });
+document.addEventListener('wheel', (e) => {
+  if (!controls.isLocked || !game.running) return;
+  const order = slotOrder(), i = order.indexOf(weapon.id);
+  equip(order[(i + (e.deltaY > 0 ? 1 : order.length - 1)) % order.length]);
+}, { passive: true });
 document.addEventListener('keyup', (e) => { keys[e.code] = false; if (e.code === 'KeyC') player.crouching = false; });
 document.addEventListener('mousedown', (e) => {
   if (!controls.isLocked) return;
-  if (e.button === 0) weapon.shooting = true;
+  if (e.button === 0) { weapon.shooting = true; weapon.pull = true; }
   if (e.button === 2) weapon.ads = true;
 });
 document.addEventListener('mouseup', (e) => {
@@ -578,8 +624,8 @@ controls.addEventListener('unlock', () => {
 controls.addEventListener('lock', () => { game.paused = false; show('hud'); });
 
 function reload() {
-  if (weapon.reloadT > 0 || weapon.mag === weapon.size || weapon.reserve <= 0) return;
-  weapon.reloadT = 1.4; sfx.reload();
+  if (stats().melee || weapon.reloadT > 0 || weapon.mag === weapon.size || weapon.reserve <= 0) return;
+  weapon.reloadT = stats().reload; sfx.reload();
   $('ammo').classList.add('reloading');
 }
 
@@ -608,31 +654,63 @@ const sparkMat = new THREE.MeshBasicMaterial({ color: '#3ef2e0' });
 const sparkGeo = new THREE.OctahedronGeometry(0.06);
 
 function fire() {
-  weapon.mag--; weapon.fireCd = 0.105; weapon.recoil = 1; game.stats.shots++;
-  sfx.shot();
+  const s = stats();
+  weapon.mag--; weapon.fireCd = s.rate; weapon.recoil = 1; game.stats.shots++;
+  sfx.shot(s.sound);
   flash.visible = true; flashLight.intensity = 6;
   setTimeout(() => { flash.visible = false; flashLight.intensity = 0; }, 45);
 
   const moving = moveDir().lengthSq() > 0 || !player.onGround;
-  const spread = ((moving ? 0.035 : 0.006) + weapon.recoil * 0.004) * (1 - 0.8 * adsAmount()) * (1 - 0.4 * player.crouchK);
-  ray.setFromCamera(new THREE.Vector2((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread), camera);
+  const k = adsAmount();
+  let spread = ((moving ? s.spread[1] : s.spread[0]) + weapon.recoil * 0.004) * (1 - 0.8 * k) * (1 - 0.4 * player.crouchK);
+  if (s.hipSpread) spread += s.hipSpread * (1 - k);              // snipers are wild from the hip
+  if (s.pellets > 1) spread = s.spread[0] * (1 - 0.3 * k);       // a shotgun always throws a cone
   const targets = [...solids.map((s) => s.mesh), ...ghosts.filter((g) => g.state !== 'dead').flatMap((g) => [g.body, g.head])];
-  const hit = ray.intersectObjects(targets, false)[0];
-  tracer(hit ? hit.point : ray.ray.at(60, new THREE.Vector3()));
-  if (hit) {
-    const s = new THREE.Mesh(sparkGeo, sparkMat); s.position.copy(hit.point); s.userData.life = 0.25;
-    world.add(s); sparks.push(s);
+  const hits = new Map(); // pellets add up per ghost
+  for (let p = 0; p < s.pellets; p++) {
+    ray.setFromCamera(new THREE.Vector2((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread), camera);
+    const hit = ray.intersectObjects(targets, false)[0];
+    if (p < 4) tracer(hit ? hit.point : ray.ray.at(60, new THREE.Vector3()));
+    if (!hit) continue;
+    const sp = new THREE.Mesh(sparkGeo, sparkMat); sp.position.copy(hit.point); sp.userData.life = 0.25;
+    world.add(sp); sparks.push(sp);
     const info = hit.object.userData;
-    if (info.ghost) damageGhost(info.ghost, info.part === 'head');
+    if (info.ghost) {
+      const head = info.part === 'head', prev = hits.get(info.ghost) || { dmg: 0, head: false };
+      hits.set(info.ghost, { dmg: prev.dmg + s.dmg * (head ? s.head : 1), head: prev.head || head });
+    }
   }
+  for (const [gh, h] of hits) if (gh.state !== 'dead') damageGhost(gh, h.head, h.dmg);
   // camera kick
-  camera.rotation.x = clamp(camera.rotation.x + 0.006 * (1 - 0.5 * adsAmount()), -1.5, 1.5);
+  camera.rotation.x = clamp(camera.rotation.x + s.kick * (1 - 0.5 * k), -1.5, 1.5);
   if (weapon.mag <= 0) reload();
   updateHud();
 }
 
-function damageGhost(gh, head) {
-  const dmg = head ? 100 : 34;
+// Butterfly knife: left-click slashes, right-click stabs. The hit lands partway through the swing.
+function knifeAttack(heavy) {
+  const s = stats();
+  weapon.fireCd = heavy ? s.heavyRate : s.rate;
+  // left-click alternates a forehand and a backhand slash, like CS2
+  const name = heavy ? 'stab' : (weapon.backhand ? 'slash2' : 'slash1');
+  if (!heavy) weapon.backhand = !weapon.backhand;
+  weapon.knifeAnim = { name, t: 0, fired: 0 };
+  game.stats.shots++;
+}
+function knifeHit(heavy) {
+  const s = stats(), fwd = camera.getWorldDirection(new THREE.Vector3()).setY(0).normalize();
+  let best = null, bestD = Infinity;
+  for (const gh of ghosts) {
+    if (gh.state !== 'chase' && gh.state !== 'emerging') continue;
+    const to = gh.group.position.clone().sub(camera.position).setY(0), d = to.length();
+    if (d > s.range + 0.35 * gh.scale || fwd.dot(to.normalize()) < 0.55) continue;     // in reach and in front of you
+    if (!canSee(camera.position.clone(), gh.group.position.clone())) continue;            // not through walls
+    if (d < bestD) { best = gh; bestD = d; }
+  }
+  if (best) damageGhost(best, false, heavy ? s.heavyDmg : s.dmg);
+}
+
+function damageGhost(gh, head, dmg = head ? 100 : 34) {
   gh.hp -= dmg; game.stats.hits++;
   if (head) game.stats.heads++;
   (head ? sfx.head : sfx.hit)();
@@ -644,7 +722,7 @@ function damageGhost(gh, head) {
     gh.state = 'dead'; gh.t = 0; game.stats.kills++;
     burst(gh.group.position.clone(), gh.boss ? 40 : 20);
     sfx.kill(); feed(gh.name, head);
-    weapon.reserve = Math.min(weapon.maxReserve, weapon.reserve + 10); updateHud();
+    if (!stats().melee) weapon.reserve = Math.min(weapon.maxReserve, weapon.reserve + Math.ceil(weapon.size / 3)); updateHud();
   }
 }
 
@@ -715,7 +793,7 @@ function updatePlayer(dt) {
     player.dashT -= dt;
     player.pos.addScaledVector(player.dashDir, 22 * dt);
   } else {
-    player.pos.addScaledVector(dir, SPEED * (1 - 0.45 * adsAmount()) * (1 - 0.5 * player.crouchK) * dt);
+    player.pos.addScaledVector(dir, SPEED * stats().move * (1 - 0.45 * adsAmount()) * (1 - 0.5 * player.crouchK) * dt);
   }
   // crouch eases in and out over about a tenth of a second
   player.crouchK += ((player.crouching ? 1 : 0) - player.crouchK) * Math.min(1, dt * 14);
@@ -730,33 +808,127 @@ function updatePlayer(dt) {
 }
 
 function updateWeapon(dt) {
+  const s = stats(), vm = viewModels[weapon.id];
   weapon.fireCd -= dt;
-  if (weapon.reloadT > 0) {
+  weapon.drawT = Math.max(0, weapon.drawT - dt);
+  if (s.melee) updateKnife(dt, vm);
+  else if (weapon.reloadT > 0) {
     weapon.reloadT -= dt;
-    gun.rotation.x = -0.6 * Math.sin(Math.min(1, 1 - weapon.reloadT / 1.4) * Math.PI);
+    gun.rotation.x = -0.6 * Math.sin(Math.min(1, 1 - weapon.reloadT / s.reload) * Math.PI);
     if (weapon.reloadT <= 0) { const take = Math.min(weapon.size - weapon.mag, weapon.reserve); weapon.mag += take; weapon.reserve -= take; gun.rotation.x = 0; $('ammo').classList.remove('reloading'); updateHud(); }
-  } else if (weapon.shooting && weapon.fireCd <= 0 && weapon.mag > 0) {
-    fire();
+  } else if (weapon.shooting && weapon.fireCd <= 0 && weapon.drawT <= 0 && (s.auto || weapon.pull)) {
+    weapon.pull = false; // semi-automatic guns need a fresh click
+    if (weapon.mag > 0) fire(); else reload();
   }
   weapon.recoil = Math.max(0, weapon.recoil - dt * 6);
-  // aim down sights: ease in about 0.15 s, dropped while reloading or dashing
-  const wantAds = weapon.ads && weapon.reloadT <= 0 && player.dashT <= 0 ? 1 : 0;
+  // aim down sights: ease in about 0.15 s, dropped while reloading, dashing or holding the knife
+  const wantAds = weapon.ads && !s.melee && weapon.reloadT <= 0 && player.dashT <= 0 ? 1 : 0;
   weapon.adsT = clamp(weapon.adsT + (wantAds ? dt : -dt) * 7, 0, 1);
   const k = adsAmount();
-  const fov = BASE_FOV + (ADS_FOV - BASE_FOV) * k;
+  const fov = BASE_FOV + ((s.adsFov || BASE_FOV) - BASE_FOV) * k;
   if (Math.abs(camera.fov - fov) > 0.01) {
     camera.fov = fov; camera.updateProjectionMatrix();
     controls.pointerSpeed = fov / BASE_FOV; // keep aim steady when zoomed in
   }
-  const scoped = ST.realistic && k > 0.92;
+  const scoped = !!s.scope && k > 0.92;
   gun.visible = !scoped;
   $('scope').classList.toggle('on', scoped);
-  $('hud').classList.toggle('ads', ST.realistic && k > 0.5); // the scope brings its own reticle
-  _gunPos.lerpVectors(GUN_REST, GUN_ADS, k);
+  $('hud').classList.toggle('ads', !!s.scope && k > 0.5); // the scope brings its own reticle
+  _gunPos.lerpVectors(vm.rest, vm.ads, k);
+  _gunPos.y -= weapon.drawT * 0.5; // raise the weapon as you draw it
   gun.rotation.y = -0.04 * (1 - k);
   gun.position.set(_gunPos.x, _gunPos.y + weapon.recoil * 0.015 * (1 - 0.6 * k), _gunPos.z + weapon.recoil * 0.06 * (1 - 0.5 * k));
   const moving = moveDir().lengthSq() > 0 || !player.onGround;
-  document.documentElement.style.setProperty('--spread', `${(moving ? 8 : 0) + weapon.recoil * 6}px`);
+  document.documentElement.style.setProperty('--spread', `${(moving ? 8 : 0) + weapon.recoil * 6 + (s.pellets > 1 ? 16 : 0)}px`);
+}
+
+const ease = (t) => t * t * (3 - 2 * t);
+
+// ---------------------------------------------------------------- butterfly knife animation
+// A pose: hand offset (x, y, z), hand rotation on top of the resting grip (rx, ry, rz), extra spin of the
+// blade about the pivot (spin), and the angle of each handle relative to the blade: safe (a) and bite (b).
+// Open is a = 0, b = 0. Closed is a = PI, b = -PI. The safe handle stays in the hand.
+const PI = Math.PI;
+const POSE = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, spin: 0, a: 0, b: 0 };
+const CLOSED = { a: PI, b: -PI };
+const KNIFE_ANIMS = {
+  // deploy: comes up closed, bite handle drops away, the blade swings out and latches
+  draw: { len: 1.0, keys: [
+    [0.0, { ...CLOSED, y: -0.3, rx: 0.9, rz: -0.4 }],
+    [0.22, { ...CLOSED, y: -0.04, rx: 0.25, rz: -0.2 }],
+    [0.42, { a: PI, b: 0, rz: -0.75, x: 0.02 }],
+    [0.68, { a: 0, b: 0, rz: 0.35, ry: -0.2 }],
+    [1.0, {}]], events: [[0.42, 'click'], [0.66, 'click']] },
+  // inspect (F): show one face, roll to the other, fan flips, aerial spin, catch, open
+  inspect: { len: 5.2, keys: [
+    [0.0, {}],
+    [0.35, { x: -0.07, y: 0.05, z: 0.05, rx: -0.15, ry: 0.85, rz: 0.15 }],
+    [1.05, { x: -0.07, y: 0.05, z: 0.05, rx: -0.15, ry: 0.85, rz: 0.35 }],
+    [1.45, { x: -0.06, y: 0.05, z: 0.05, rx: -0.1, ry: 0.85, rz: 0.35 + PI }],
+    [2.05, { x: -0.06, y: 0.04, z: 0.04, rx: -0.1, ry: 0.85, rz: 0.2 + PI }],
+    [2.35, { x: -0.02, y: 0.02, rz: 0.2, ry: 0.2 }],
+    [2.55, { b: -PI, rz: -0.35, ry: 0.15 }],
+    [2.75, { ...CLOSED, rz: 0.35, ry: 0.2 }],
+    [2.95, { a: PI, b: 0, rz: -0.35 }],
+    [3.15, { a: 0, b: 0, rz: 0.3 }],
+    [3.35, { b: -PI, rz: -0.3 }],
+    [3.55, { ...CLOSED, rz: 0.2 }],
+    [3.7, { ...CLOSED, y: 0.09, rx: -0.3, spin: 0 }],
+    [4.15, { ...CLOSED, y: 0.12, rx: -0.3, spin: 2 * PI }],
+    [4.35, { ...CLOSED, y: 0.0, spin: 2 * PI }],
+    [4.55, { a: PI, b: 0, rz: -0.6, spin: 2 * PI }],
+    [4.8, { a: 0, b: 0, rz: 0.25, spin: 2 * PI }],
+    [5.2, { spin: 2 * PI }]], events: [[0.35, 'swish'], [1.3, 'swish'], [2.75, 'click'], [3.15, 'click'], [3.55, 'click'], [3.7, 'swish'], [4.35, 'click'], [4.78, 'click']] },
+  // forehand slash: cock to the right, sweep across to the left
+  slash1: { len: 0.42, keys: [
+    [0.0, {}], [0.07, { x: 0.05, y: 0.02, ry: 0.55, rz: 0.4 }], [0.2, { x: -0.16, y: -0.02, rx: 0.25, ry: -1.25, rz: -0.55 }], [0.42, {}]],
+    events: [[0.05, 'swish'], [0.13, 'hit']] },
+  // backhand slash: the other way
+  slash2: { len: 0.42, keys: [
+    [0.0, {}], [0.07, { x: -0.1, y: 0.03, ry: -0.8, rz: -0.5 }], [0.2, { x: 0.06, y: -0.03, rx: 0.2, ry: 0.7, rz: 0.6 }], [0.42, {}]],
+    events: [[0.05, 'swish'], [0.13, 'hit']] },
+  // heavy stab: pull back, drive forward, hold, recover
+  stab: { len: 0.8, keys: [
+    [0.0, {}], [0.2, { y: 0.03, z: 0.09, rx: -0.45, ry: 0.15 }], [0.32, { x: -0.03, y: -0.01, z: -0.26, rx: 0.3, ry: -0.1 }],
+    [0.46, { x: -0.03, z: -0.24, rx: 0.3, ry: -0.1 }], [0.8, {}]],
+    events: [[0.22, 'swish'], [0.3, 'hit']] },
+};
+// fill every key with the resting values, so a key only lists what changes
+for (const anim of Object.values(KNIFE_ANIMS)) anim.keys = anim.keys.map(([t, k]) => [t, { ...POSE, ...k }]);
+const _pose = { ...POSE };
+function knifePose(anim, t) {
+  const keys = anim.keys;
+  let i = 0; while (i < keys.length - 2 && t > keys[i + 1][0]) i++;
+  const [t0, k0] = keys[i], [t1, k1] = keys[Math.min(i + 1, keys.length - 1)];
+  const f = t1 > t0 ? ease(clamp((t - t0) / (t1 - t0), 0, 1)) : 1;
+  for (const c in POSE) _pose[c] = k0[c] + (k1[c] - k0[c]) * f;
+  return _pose;
+}
+
+function updateKnife(dt, vm) {
+  if (weapon.drawT <= 0 && weapon.fireCd <= 0) {
+    if (weapon.shooting) knifeAttack(false);
+    else if (weapon.ads) knifeAttack(true);
+  }
+  let p = POSE;
+  const st = weapon.knifeAnim;
+  if (st) {
+    const anim = KNIFE_ANIMS[st.name];
+    st.t += dt;
+    while (st.fired < anim.events.length && st.t >= anim.events[st.fired][0]) {  // sounds and the hit, on time
+      const ev = anim.events[st.fired++][1];
+      if (ev === 'hit') knifeHit(st.name === 'stab'); else sfx[ev]();
+    }
+    p = knifePose(anim, Math.min(st.t, anim.len));
+    if (st.t >= anim.len) weapon.knifeAnim = null;
+  }
+  // idle: the hand breathes a little
+  const breathe = Math.sin(game.time * 1.6) * 0.004, sway = Math.sin(game.time * 0.9) * 0.02;
+  vm.group.position.set(p.x, p.y + breathe, p.z);
+  vm.group.rotation.set(vm.base.x + p.rx, vm.base.y + p.ry + sway * 0.3, vm.base.z + p.rz + sway);
+  vm.spinner.rotation.x = -p.a + p.spin; // the safe handle stays put in the hand while the blade swings
+  vm.handles[0].rotation.x = p.a;
+  vm.handles[1].rotation.x = p.b;
 }
 
 function updateGhosts(dt) {
@@ -935,10 +1107,13 @@ function updateHud() {
   $('arm').textContent = Math.ceil(player.armor);
   $('arm-bar').style.width = player.armor + '%';
   $('armor').classList.toggle('empty', player.armor <= 0);
-  $('mag').textContent = weapon.mag;
+  const melee = !!stats().melee;
+  $('mag').textContent = melee ? '∞' : weapon.mag;
   $('reserve').textContent = weapon.reserve;
+  $('ammo').classList.toggle('melee', melee);
+  $('wname').textContent = `${stats().name}  ·  ${slotOrder().indexOf(weapon.id) + 1}`;
   $('ammo').classList.toggle('low', weapon.mag > 0 && weapon.mag <= 10);
-  $('ammo').classList.toggle('empty', weapon.mag === 0 && weapon.reserve === 0);
+  $('ammo').classList.toggle('empty', !melee && weapon.mag === 0 && weapon.reserve === 0);
   $('wave-label').textContent = game.wave ? `WAVE ${game.wave} / ${WAVES}` : 'GET READY';
 }
 
@@ -1327,6 +1502,26 @@ $('load-paste').addEventListener('click', async () => {
   }
 });
 
+// primary weapon picker on the briefing screen (remembered between games)
+function drawLoadout() {
+  $('loadout').innerHTML = '';
+  for (const id of PRIMARIES) {
+    const w = WEAPONS[id], b = document.createElement('button');
+    b.type = 'button'; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(id === weapon.primary));
+    b.innerHTML = '<b></b><small></small><i></i>';
+    b.querySelector('b').textContent = w.name;
+    b.querySelector('small').textContent = w.blurb;
+    b.querySelector('i').textContent = `${w.mag} / ${w.reserve} \u00b7 ${w.pellets > 1 ? `${w.pellets}\u00d7${w.dmg}` : w.dmg} dmg`;
+    b.addEventListener('click', () => {
+      weapon.primary = id;
+      try { localStorage.setItem('phantom-primary', id); } catch { /* storage is optional */ }
+      drawLoadout();
+    });
+    $('loadout').appendChild(b);
+  }
+}
+drawLoadout();
+
 $('enter').addEventListener('click', () => { audio(); startGame(); });
 $('resume').addEventListener('click', () => controls.lock());
 $('again').addEventListener('click', () => startGame());
@@ -1358,4 +1553,4 @@ if (!levelFromHash()) {
 function step(dt) { // one logic tick without drawing (used by automated tests)
   game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt); updateFx(dt); updateOrbs(dt); worldUpdate(dt, game.time); drawRadar();
 }
-window.phantom = { game, player, camera, weapon, burst, STYLE, perf, renderer, get ghosts() { return ghosts; }, get solids() { return solids; }, nextWave, startGame, cleanLevel, step, requestedCounts };
+window.phantom = { game, player, camera, weapon, burst, STYLE, perf, renderer, get ghosts() { return ghosts; }, get solids() { return solids; }, nextWave, startGame, cleanLevel, step, requestedCounts, equip, viewModels };

@@ -291,3 +291,23 @@ body.style-tactical #hud::before { content: ""; position: absolute; inset: 0; po
   .spooky .bat { left: 30%; }
   .spooky .b2 { left: 60%; } .spooky .b3 { left: 75%; }
 }
+
+/* weapon name in the ammo box; the knife shows no reserve */
+#wname { display: block; font-size: 11px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin-bottom: 2px; font-family: var(--body); font-weight: 700; }
+#ammo.melee small { display: none; }
+
+/* primary weapon picker on the briefing screen */
+.loadout { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0 0 18px; }
+@media (max-width: 640px) { .loadout { grid-template-columns: repeat(2, 1fr); } }
+.loadout button { text-align: left; padding: 10px 12px; background: #ffffff08; border: 1px solid #ffffff22; color: var(--paper); cursor: pointer; font: inherit; }
+.loadout button b { display: block; font-family: var(--head); font-size: 13px; letter-spacing: 1px; margin-bottom: 4px; }
+.loadout button small { color: var(--muted); font-size: 12px; line-height: 1.35; display: block; }
+.loadout button i { display: block; font-style: normal; color: var(--muted); font-size: 11px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.loadout button:hover { border-color: #ffffff55; }
+.loadout button[aria-checked="true"] { border-color: var(--red); background: #ff465518; }
+.loadout button[aria-checked="true"] b { color: var(--red); }
+.loadout button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+/* halloween night: a heavier lens vignette (CSS only, no GPU cost) */
+body.style-halloween #hud::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(8,2,14,.55) 100%); }

@@ -75,6 +75,10 @@ python3 server/server.py        # Python 3.10+, no packages needed
 | Shift | Dash (3 s cooldown) |
 | Space | Jump (you can stand on furniture) |
 | C (hold) | Crouch: slower but steadier aim, and a desk is enough cover from ghost orbs |
+| 1 / 2 / 3 | Primary gun / Hex Pistol / butterfly knife (pick the primary on the briefing screen: rifle, SMG, shotgun or sniper) |
+| Q, mouse wheel | Last weapon, cycle weapons |
+| F | Flip the butterfly knife |
+| L | Flashlight on/off (Halloween night style, the default) |
 
 Headshots do 2.5x damage. Ghosts sway side to side, so aim for the head. Three waves; the last one has a boss.
 
