@@ -4,6 +4,14 @@
 
 import * as THREE from 'three';
 import { PointerLockControls } from './vendor/PointerLockControls.js';
+import { EffectComposer } from './vendor/postprocessing/EffectComposer.js';
+import { RenderPass } from './vendor/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from './vendor/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from './vendor/postprocessing/OutputPass.js';
+import { STYLES, pickStyle, decorate, glow, floorTexture, wallTexture, grainTexture } from './styles.js';
+
+const STYLE = pickStyle();
+const ST = STYLES[STYLE];
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -43,6 +51,7 @@ function cleanLevel(data) {
       pos: [x, z],
       size: [num(sz[0], 1, 0.2, 4), num(sz[1], 1, 0.2, 4), num(sz[2], 1, 0.2, 4)],
       color: hex(o.color, '#8a7bd8'),
+      elevation: num(o.elevation, 0, 0, 2.5),
       haunted: !!o.haunted,
     };
     if (c.haunted) {
@@ -121,6 +130,8 @@ renderer.setPixelRatio(LOWFX ? 1 : Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = !LOWFX;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+if (ST.realistic) { renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.15; }
+document.body.classList.add('style-' + STYLE);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 200);
@@ -128,10 +139,20 @@ camera.rotation.order = 'YXZ';
 scene.add(camera);
 const controls = new PointerLockControls(camera, document.body);
 
+// Bloom (glow) post-processing. Turned off in ?lowfx mode.
+let composer = null;
+if (!LOWFX) {
+  composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), ST.bloom.strength, ST.bloom.radius, ST.bloom.threshold));
+  composer.addPass(new OutputPass());
+}
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  if (composer) composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // Cel-shading: 3 hard light bands, plus black "inverted hull" outlines.
@@ -141,9 +162,13 @@ const gradientMap = (() => {
   tex.needsUpdate = true;
   return tex;
 })();
-const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap, ...extra });
-const outlineMat = new THREE.MeshBasicMaterial({ color: 0x120d1f, side: THREE.BackSide });
+const toon = (color, extra = {}) => ST.realistic
+  ? new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.05, ...extra })
+  : new THREE.MeshToonMaterial({ color, gradientMap, ...extra });
+const outlineMat = new THREE.MeshBasicMaterial({ color: ST.outline || 0x000000, side: THREE.BackSide });
 function outline(mesh, thickness = 0.04) {
+  if (!ST.outline) return mesh;
+  thickness *= ST.outlineMul;
   const o = new THREE.Mesh(mesh.geometry, outlineMat);
   o.scale.setScalar(1 + thickness);
   o.raycast = () => {}; // outlines never block bullets
@@ -197,10 +222,10 @@ function buildWorld(lv) {
   solids = []; haunts = [];
   const { width: W, depth: D, height: H } = lv.size;
   half = { x: W / 2, z: D / 2 };
-  const L = LIGHTS[lv.lighting];
+  const L = ST; // the visual style decides sky and light; the level decides colours and layout
 
   scene.background = skyTexture(L.sky[0], L.sky[1]);
-  scene.fog = new THREE.Fog(lv.palette.fog, 8 * L.fogMul + 6, Math.max(W, D) * 2.2);
+  scene.fog = new THREE.Fog(L.fog, L.fogNear, Math.max(W, D) * L.fogFar);
   world.add(new THREE.HemisphereLight(L.hemi[0], L.hemi[1], L.hemi[2]));
   const sun = new THREE.DirectionalLight(L.sun[0], L.sun[1]);
   sun.position.set(W * 0.3, 14, D * 0.2);
@@ -210,26 +235,28 @@ function buildWorld(lv) {
   world.add(sun);
 
   // floor with a training-range grid
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D), toon(lv.palette.floor));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D), ST.realistic ? new THREE.MeshStandardMaterial({ map: floorTexture(lv.palette.floor, W, D), roughness: 0.6 }) : toon(ST.neon ? '#05030c' : lv.palette.floor));
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; floor.userData.solid = true;
   world.add(floor);
   solids.push({ box: new THREE.Box3().setFromObject(floor), mesh: floor });
   const grid = new THREE.GridHelper(Math.max(W, D), Math.max(W, D), lv.palette.accent, lv.palette.accent);
-  grid.material.transparent = true; grid.material.opacity = 0.18; grid.position.y = 0.01; grid.scale.set(W / Math.max(W, D), 1, D / Math.max(W, D));
+  grid.material.transparent = true; grid.material.opacity = ST.floorGrid;
+  if (ST.neon) grid.material.color = glow(lv.palette.accent, 1.1); grid.position.y = 0.01; grid.scale.set(W / Math.max(W, D), 1, D / Math.max(W, D));
   grid.raycast = () => {};
   world.add(grid);
 
   // walls (open roof so the anime sky shows)
-  const wallMat = toon(lv.palette.walls);
-  const stripeMat = toon(lv.palette.accent, { emissive: lv.palette.accent, emissiveIntensity: 0.6 });
+  const wallMat = toon(ST.neon ? '#0a0716' : lv.palette.walls);
+  const stripeMat = toon(lv.palette.accent, { emissive: lv.palette.accent, emissiveIntensity: LOWFX ? 0.6 : ST.stripeGlow });
   const T = 0.4;
   for (const [x, z, w, d] of [[0, -D / 2, W + T, T], [0, D / 2, W + T, T], [-W / 2, 0, T, D], [W / 2, 0, T, D]]) {
-    const wall = outline(new THREE.Mesh(new THREE.BoxGeometry(w, H, d), wallMat), 0.01);
+    const wall = outline(new THREE.Mesh(new THREE.BoxGeometry(w, H, d), ST.realistic ? new THREE.MeshStandardMaterial({ map: wallTexture(lv.palette.walls, Math.max(w, d), H), roughness: 0.9 }) : wallMat), 0.01);
     wall.position.set(x, H / 2, z); wall.castShadow = wall.receiveShadow = true;
+    if (ST.neon) neonEdges(wall, lv.palette.accent, 1.1);
     world.add(wall); solids.push({ box: new THREE.Box3().setFromObject(wall), mesh: wall });
     const stripe = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, 0.12, d + 0.02), stripeMat);
     stripe.position.set(x, 1.0, z); stripe.raycast = () => {};
-    world.add(stripe);
+    if (!ST.realistic) world.add(stripe);
   }
 
   // objects from the photo
@@ -239,11 +266,14 @@ function buildWorld(lv) {
     if (o.shape === 'cylinder') geo = new THREE.CylinderGeometry(w / 2, w / 2, h, 20);
     else if (o.shape === 'sphere') geo = new THREE.SphereGeometry(0.5, 20, 14);
     else geo = new THREE.BoxGeometry(w, h, d);
-    const mat = toon(o.color, o.haunted ? { emissive: '#9b4dff', emissiveIntensity: 0.25 } : {});
+    const mat = ST.neon ? toon('#0c0a1c')
+      : ST.realistic ? new THREE.MeshStandardMaterial({ color: o.color, map: grainTexture(), roughness: 0.7, metalness: 0.1 })
+      : toon(o.color, o.haunted ? { emissive: '#9b4dff', emissiveIntensity: 0.25 } : {});
     const mesh = outline(new THREE.Mesh(geo, mat), o.shape === 'box' ? 0.03 : 0.05);
+    if (ST.neon) neonEdges(mesh, o.haunted ? '#ff2bd6' : o.color, o.haunted ? 2 : 1.4);
     if (o.shape === 'sphere') mesh.scale.set(w, h, d);
     const x = (o.pos[0] - 0.5) * (W - 1.5), z = (o.pos[1] - 0.5) * (D - 1.5);
-    mesh.position.set(x, h / 2, z);
+    mesh.position.set(x, (o.elevation || 0) + h / 2, z);
     mesh.castShadow = mesh.receiveShadow = true;
     world.add(mesh);
     solids.push({ box: new THREE.Box3().setFromObject(mesh), mesh });
@@ -251,15 +281,24 @@ function buildWorld(lv) {
     const label = textSprite(o.name, { scale: 2.0 });
     label.position.set(x, h + 0.45, z);
     label.material.opacity = o.haunted ? 1 : 0.55;
-    world.add(label);
+    if (ST.labels !== false) world.add(label);
 
     if (o.haunted) {
-      const light = new THREE.PointLight('#b06bff', 2.5, 5);
+      const light = new THREE.PointLight(ST.realistic ? '#cfe0ff' : '#b06bff', 2.5, 5);
       light.position.set(x, h + 0.6, z);
       world.add(light);
       haunts.push({ obj: o, mesh, light, base: mesh.position.clone(), shake: 0 });
     }
   }
+  worldUpdate = decorate(STYLE, world, lv);
+}
+
+let worldUpdate = () => {};
+function neonEdges(mesh, color, k) {
+  const c = new THREE.Color(color); c.offsetHSL(0, 0.2, 0.15);
+  const e = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 20), new THREE.LineBasicMaterial({ color: c.multiplyScalar(LOWFX ? 1 : k) }));
+  e.raycast = () => {};
+  mesh.add(e);
 }
 
 // ======================================================================
@@ -278,21 +317,37 @@ const gun = new THREE.Group();
   barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.02, -0.4);
   const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.102, 0.03, 0.4), toon('#ff4655', { emissive: '#ff4655', emissiveIntensity: 0.5 }));
   stripe.position.set(0, 0.03, -0.02);
-  gun.add(body, grip, barrel, stripe);
+  if (ST.realistic) {
+    const M = (c, r = 0.45, mt = 0.5) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: mt });
+    const dark = M('#1c1e22'), mid = M('#2c2f35'), rub = M('#121315', 0.85, 0.1);
+    const B = (w, h, d, m, x, y, z, rx = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.x = rx; gun.add(b); };
+    const C = (r, l, m, x, y, z) => { const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, 14), m); c.rotation.x = Math.PI / 2; c.position.set(x, y, z); gun.add(c); };
+    B(0.07, 0.11, 0.42, dark, 0, 0, 0);            // receiver
+    B(0.078, 0.088, 0.34, mid, 0, -0.005, -0.36);   // handguard
+    C(0.014, 0.26, dark, 0, 0.005, -0.64);          // barrel
+    C(0.021, 0.07, dark, 0, 0.005, -0.79);          // muzzle
+    B(0.05, 0.2, 0.09, rub, 0, -0.15, -0.08, 0.25); // magazine
+    B(0.045, 0.14, 0.06, rub, 0, -0.12, 0.13, -0.35); // grip
+    B(0.05, 0.1, 0.26, mid, 0, -0.02, 0.34);        // stock
+    B(0.03, 0.016, 0.36, dark, 0, 0.062, -0.12);    // rail
+    C(0.026, 0.2, dark, 0, 0.1, -0.06);             // scope
+    B(0.02, 0.04, 0.02, dark, 0, 0.075, -0.12); B(0.02, 0.04, 0.02, dark, 0, 0.075, 0.0);
+  } else gun.add(body, grip, barrel, stripe);
   gun.traverse((m) => { m.raycast = () => {}; });
 })();
-const flash = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: '#fff3a0' }));
+const flash = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: glow('#fff3a0', LOWFX ? 1 : 4) }));
 flash.position.set(0, 0.02, -0.58); flash.visible = false; flash.raycast = () => {};
 const flashLight = new THREE.PointLight('#ffd27a', 0, 6);
 flashLight.position.copy(flash.position);
 gun.add(flash, flashLight);
-const GUN_REST = new THREE.Vector3(0.17, -0.16, -0.36);
+if (ST.realistic) flash.position.set(0, 0.005, -0.84);
+const GUN_REST = ST.realistic ? new THREE.Vector3(0.2, -0.21, -0.42) : new THREE.Vector3(0.17, -0.16, -0.36);
 gun.position.copy(GUN_REST);
-gun.scale.setScalar(0.45);
+gun.scale.setScalar(ST.realistic ? 0.8 : 0.45);
 gun.rotation.y = -0.04;
 camera.add(gun);
 
-const weapon = { mag: 25, size: 25, reloadT: 0, fireCd: 0, recoil: 0, shooting: false };
+const weapon = { mag: 30, size: 30, reloadT: 0, fireCd: 0, recoil: 0, shooting: false };
 
 // ======================================================================
 // GHOSTS
@@ -302,28 +357,79 @@ const ghostGeo = new THREE.LatheGeometry(
   [[0, -0.55], [0.42, -0.5], [0.36, -0.3], [0.42, -0.05], [0.4, 0.25], [0.3, 0.45], [0, 0.55]].map(([x, y]) => new THREE.Vector2(x, y)), 18);
 const headGeo = new THREE.SphereGeometry(0.32, 20, 14);
 const eyeGeo = new THREE.SphereGeometry(0.06, 10, 8);
-const eyeMat = new THREE.MeshBasicMaterial({ color: '#120d1f' });
+const eyeMat = ST.eyes === 'glow' ? new THREE.MeshBasicMaterial({ color: glow(ST.eyeGlow, 3) }) : new THREE.MeshBasicMaterial({ color: '#120d1f' });
+const shineMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
 const blushMat = new THREE.MeshBasicMaterial({ color: '#ff7eb6' });
+const tailGeo = new THREE.ConeGeometry(0.34, 0.75, 16, 1, true);
+const armGeo = new THREE.SphereGeometry(0.11, 10, 8);
 
-function makeGhost(haunt, { boss = false, hpMul = 1, speedMul = 1 } = {}) {
+function makeSoldier(haunt, { boss = false, hpMul = 1, speedMul = 1 } = {}) {
+  const g = haunt.obj.ghost, group = new THREE.Group();
+  const S = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.85, metalness: 0.05 });
+  const uni = S(boss ? '#4a2026' : '#26314c'), vest = S('#2a2c30'), dark = S('#16181c'), band = S(haunt.obj.color);
+  uni.emissive = new THREE.Color('#ff2020'); uni.emissiveIntensity = 0;
+  const parts = [];
+  const B = (w, h, d, m, x, y, z, parent = group) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.castShadow = true; parent.add(b); parts.push(b); return b; };
+  const legs = [];
+  for (const s of [-1, 1]) {
+    const hip = new THREE.Group(); hip.position.set(0.12 * s, 0.9, 0); group.add(hip); legs.push(hip);
+    B(0.18, 0.86, 0.2, uni, 0, -0.43, 0, hip); B(0.2, 0.1, 0.28, dark, 0, -0.86, 0.04, hip);
+  }
+  const torso = B(0.5, 0.62, 0.28, uni, 0, 1.22, 0);
+  B(0.54, 0.44, 0.33, vest, 0, 1.26, 0);
+  for (const s of [-1, 1]) {
+    const sh = new THREE.Group(); sh.position.set(0.32 * s, 1.46, 0); sh.rotation.x = -1.25; sh.rotation.z = -0.35 * s; group.add(sh);
+    B(0.14, 0.56, 0.16, uni, 0, -0.26, 0, sh); if (s < 0) B(0.15, 0.08, 0.17, band, 0, -0.08, 0, sh);
+  }
+  B(0.06, 0.09, 0.72, dark, 0.06, 1.34, 0.42);  // rifle
+  const head = B(0.26, 0.28, 0.26, S('#1b1e24'), 0, 1.7, 0);
+  B(0.31, 0.12, 0.31, S('#20242b'), 0, 1.85, -0.01); // helmet
+  B(0.22, 0.06, 0.03, S('#0a0b0d'), 0, 1.73, 0.135); // goggles
+  const maxHp = g.hp * hpMul * (boss ? 3 : 1);
+  const ghost = { group, body: torso, head, flashMat: uni, legs, soldier: true, name: boss ? `${g.name} (BOSS)` : g.name, hp: maxHp, maxHp,
+    speed: g.speed * speedMul * (boss ? 0.8 : 1), boss, state: 'emerging', t: 0, attackCd: 0, scale: boss ? 1.15 : 1, from: haunt, phase: Math.random() * 6.28 };
+  for (const p of parts) { p.userData = { ghost, part: p === head || p.position.y > 1.6 ? 'head' : 'body' }; }
+  const tag = textSprite(null, { width: 512, height: 128, scale: 1.4 }); tag.position.y = 2.2; group.add(tag); ghost.tag = tag; drawTag(ghost);
+  const hp = haunt.mesh.position, dir = new THREE.Vector3(player.pos.x - hp.x, 0, player.pos.z - hp.z).normalize();
+  group.position.set(hp.x + dir.x * (haunt.obj.size[0] / 2 + 0.6), 0, hp.z + dir.z * (haunt.obj.size[2] / 2 + 0.6));
+  group.scale.setScalar(0.01); world.add(group); ghosts.push(ghost); burst(group.position.clone().setY(1), 14); sfx.spawn();
+  return ghost;
+}
+
+function makeGhost(haunt, opts = {}) {
+  if (ST.enemy === 'soldier') return makeSoldier(haunt, opts);
+  const { boss = false, hpMul = 1, speedMul = 1 } = opts;
   const g = haunt.obj.ghost;
   const tint = new THREE.Color(haunt.obj.color).lerp(new THREE.Color('#ffffff'), 0.65);
   const group = new THREE.Group();
-  const mat = toon(tint, { emissive: '#7a3cff', emissiveIntensity: 0.15, transparent: true, opacity: 0.92 });
+  const mat = ST.neon
+    ? new THREE.MeshBasicMaterial({ color: glow(tint.clone().lerp(new THREE.Color('#3ef2e0'), 0.6), 0.75), transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false })
+    : toon(tint, { emissive: STYLE === 'night' ? '#6a8cff' : '#7a3cff', emissiveIntensity: STYLE === 'night' ? 0.35 : 0.15, transparent: true, opacity: 0.92 });
   const body = outline(new THREE.Mesh(ghostGeo, mat), 0.05);
   const head = outline(new THREE.Mesh(headGeo, mat), 0.06);
   head.position.y = 0.82;
+  // wispy tail and little floating arms
+  const tail = outline(new THREE.Mesh(tailGeo, mat), 0.04);
+  tail.rotation.x = Math.PI; tail.position.y = -0.85; tail.raycast = () => {};
+  const arms = [];
   for (const s of [-1, 1]) {
     const eye = new THREE.Mesh(eyeGeo, eyeMat); eye.scale.set(0.8, 1.4, 0.5); eye.position.set(0.11 * s, 0.86, 0.28); eye.raycast = () => {};
     const blush = new THREE.Mesh(eyeGeo, blushMat); blush.scale.set(1.2, 0.5, 0.3); blush.position.set(0.19 * s, 0.75, 0.25); blush.raycast = () => {};
     group.add(eye, blush);
+    if (ST.eyes !== 'glow') {
+      const shine = new THREE.Mesh(eyeGeo, shineMat); shine.scale.setScalar(0.35); shine.position.set(0.11 * s + 0.015, 0.9, 0.31); shine.raycast = () => {};
+      group.add(shine);
+    }
+    const arm = outline(new THREE.Mesh(armGeo, mat), 0.08);
+    arm.scale.set(1, 1.6, 1); arm.position.set(0.48 * s, 0.05, 0.05); arm.raycast = () => {};
+    group.add(arm); arms.push(arm);
   }
-  group.add(body, head);
+  group.add(body, head, tail);
   const maxHp = g.hp * hpMul * (boss ? 3 : 1);
   const ghost = {
     group, body, head, name: boss ? `${g.name} (BOSS)` : g.name, hp: maxHp, maxHp,
     speed: g.speed * speedMul * (boss ? 0.8 : 1), boss, state: 'emerging', t: 0, attackCd: 0,
-    scale: boss ? 1.7 : 1, from: haunt, phase: Math.random() * 6.28,
+    scale: boss ? 1.7 : 1, from: haunt, phase: Math.random() * 6.28, tail, arms,
   };
   body.userData = { ghost, part: 'body' };
   head.userData = { ghost, part: 'head' };
@@ -477,6 +583,7 @@ function fire() {
   ray.setFromCamera(new THREE.Vector2((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread), camera);
   const targets = [...solids.map((s) => s.mesh), ...ghosts.filter((g) => g.state !== 'dead').flatMap((g) => [g.body, g.head])];
   const hit = ray.intersectObjects(targets, false)[0];
+  tracer(hit ? hit.point : ray.ray.at(60, new THREE.Vector3()));
   if (hit) {
     const s = new THREE.Mesh(sparkGeo, sparkMat); s.position.copy(hit.point); s.userData.life = 0.25;
     world.add(s); sparks.push(s);
@@ -495,12 +602,52 @@ function damageGhost(gh, head) {
   if (head) game.stats.heads++;
   (head ? sfx.head : sfx.hit)();
   const hm = $('hitmarker'); hm.className = head ? 'head' : ''; void hm.offsetWidth; hm.classList.add('show');
-  gh.body.material.emissiveIntensity = 1.2;
-  setTimeout(() => { if (gh.body.material) gh.body.material.emissiveIntensity = 0.15; }, 80);
+  const fm = gh.flashMat || gh.body.material;
+  fm.emissiveIntensity = gh.flashMat ? 0.8 : 1.2;
+  setTimeout(() => { fm.emissiveIntensity = gh.flashMat ? 0 : 0.15; }, 80);
   drawTag(gh);
   if (gh.hp <= 0) {
     gh.state = 'dead'; gh.t = 0; game.stats.kills++;
+    burst(gh.group.position.clone().setY(gh.soldier ? 1.2 : gh.group.position.y), gh.soldier ? 10 : gh.boss ? 40 : 20);
     sfx.kill(); feed(gh.name, head);
+  }
+}
+
+// ======================================================================
+// EFFECTS: bullet tracers and death bursts
+// ======================================================================
+const fx = [];
+const tracerMat = new THREE.MeshBasicMaterial({ color: glow(ST.tracer, LOWFX ? 1 : 3), transparent: true });
+const burstGeo = ST.petals ? new THREE.PlaneGeometry(0.14, 0.09) : new THREE.OctahedronGeometry(0.07);
+const burstMat = new THREE.MeshBasicMaterial({ color: glow(ST.burst, LOWFX ? 1 : 2.5), side: THREE.DoubleSide, transparent: true });
+
+function tracer(to) {
+  const from = flash.getWorldPosition(new THREE.Vector3());
+  const len = from.distanceTo(to);
+  const m = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, len), tracerMat.clone());
+  m.position.copy(from).lerp(to, 0.5); m.lookAt(to); m.raycast = () => {};
+  world.add(m); fx.push({ m, life: 0.07, max: 0.07, dispose: true });
+}
+
+function burst(at, n) {
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(burstGeo, burstMat.clone());
+    m.position.copy(at); m.raycast = () => {};
+    const v = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8 + 0.2, Math.random() - 0.5).normalize().multiplyScalar(2 + Math.random() * 3);
+    world.add(m); fx.push({ m, v, spin: new THREE.Vector3(Math.random() * 9, Math.random() * 9, Math.random() * 9), life: 0.9, max: 0.9 });
+  }
+}
+
+function updateFx(dt) {
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const f = fx[i]; f.life -= dt;
+    f.m.material.opacity = Math.max(0, f.life / f.max);
+    if (f.v) {
+      f.v.y -= (ST.petals ? 1.5 : 5) * dt; f.v.multiplyScalar(ST.petals ? 0.97 : 0.99);
+      f.m.position.addScaledVector(f.v, dt);
+      f.m.rotation.x += f.spin.x * dt; f.m.rotation.y += f.spin.y * dt; f.m.rotation.z += f.spin.z * dt;
+    }
+    if (f.life <= 0) { world.remove(f.m); if (f.dispose) f.m.geometry.dispose(); fx.splice(i, 1); }
   }
 }
 
@@ -563,6 +710,7 @@ function updateGhosts(dt) {
   for (const gh of ghosts) {
     gh.t += dt;
     const g = gh.group;
+    if (gh.soldier) { updateSoldier(gh, dt); continue; }
     if (gh.state === 'emerging') {
       const k = Math.min(1, gh.t / 1.1);
       g.scale.setScalar(gh.scale * (0.01 + 0.99 * k));
@@ -575,6 +723,8 @@ function updateGhosts(dt) {
       const side = new THREE.Vector3(-to.z, 0, to.x).normalize().multiplyScalar(Math.sin(gh.t * 2.2 + gh.phase) * 0.9);
       if (dist > 1.0) g.position.addScaledVector(to.normalize().add(side).normalize(), gh.speed * dt);
       g.position.y = 1.0 + Math.sin(gh.t * 3 + gh.phase) * 0.18 + (gh.boss ? 0.4 : 0);
+      gh.tail.rotation.z = Math.sin(gh.t * 5 + gh.phase) * 0.25;
+      gh.arms.forEach((a, k) => { a.position.y = 0.05 + Math.sin(gh.t * 4 + k * 3) * 0.08; });
       g.lookAt(player.pos.x, g.position.y, player.pos.z);
       gh.attackCd -= dt;
       if (dist < 1.3 && gh.attackCd <= 0) {
@@ -591,6 +741,30 @@ function updateGhosts(dt) {
     }
   }
   ghosts = ghosts.filter((g) => g.state !== 'gone');
+}
+
+function updateSoldier(gh, dt) {
+  const g = gh.group;
+  if (gh.state === 'emerging') {
+    const k = Math.min(1, gh.t / 0.6); g.scale.setScalar(gh.scale * (0.01 + 0.99 * k));
+    if (k >= 1) gh.state = 'chase';
+  } else if (gh.state === 'chase') {
+    const to = new THREE.Vector3(player.pos.x - g.position.x, 0, player.pos.z - g.position.z);
+    const dist = to.length(); to.normalize();
+    const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(Math.sin(gh.t * 1.3 + gh.phase) * 0.7);
+    if (dist > 1.1) {
+      g.position.addScaledVector(to.add(side).normalize(), gh.speed * 0.8 * dt);
+      collide(g.position, 0);
+      gh.legs[0].rotation.x = Math.sin(gh.t * 9) * 0.55; gh.legs[1].rotation.x = -gh.legs[0].rotation.x;
+    }
+    g.rotation.y = Math.atan2(player.pos.x - g.position.x, player.pos.z - g.position.z);
+    gh.attackCd -= dt;
+    if (dist < 1.5 && gh.attackCd <= 0) { gh.attackCd = 0.9; hurt(gh.boss ? 20 : 12); }
+  } else if (gh.state === 'dead') {
+    g.rotation.x = -Math.min(1, gh.t / 0.35) * Math.PI / 2;
+    if (gh.t > 1.6) g.position.y -= dt * 0.6;
+    if (gh.t > 2.6) { world.remove(g); gh.state = 'gone'; }
+  }
 }
 
 function hurt(dmg) {
@@ -657,6 +831,8 @@ function loop(now) {
     updateGhosts(dt);
     updateWaves(dt);
     updateSparks(dt);
+    updateFx(dt);
+    worldUpdate(dt, game.time);
     $('ability').classList.toggle('cool', player.dashCd > 0);
     $('dash-ring').style.height = (player.dashCd / 3) * 100 + '%';
   } else if (world && !game.running) {
@@ -665,8 +841,9 @@ function loop(now) {
     camera.position.set(Math.sin(game.time * 0.15) * half.x * 0.9, 4, Math.cos(game.time * 0.15) * half.z * 0.9);
     camera.lookAt(0, 0.8, 0);
     updateHaunts(dt);
+    worldUpdate(dt, game.time);
   }
-  renderer.render(scene, camera);
+  if (composer) composer.render(); else renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
@@ -805,6 +982,6 @@ if (!levelFromHash()) {
 
 // handy for testing in the browser console
 function step(dt) { // one logic tick without drawing (used by automated tests)
-  game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt);
+  game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt); updateFx(dt); worldUpdate(dt, game.time);
 }
-window.phantom = { game, player, camera, weapon, get ghosts() { return ghosts; }, nextWave, startGame, cleanLevel, step };
+window.phantom = { game, player, camera, weapon, burst, STYLE, get ghosts() { return ghosts; }, nextWave, startGame, cleanLevel, step };

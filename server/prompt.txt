@@ -10,6 +10,8 @@ Rules:
 - Only include objects you can actually see in the photo. Use at most 12 objects.
 - pos is where the object stands on the floor as [x, z], both between 0 and 1. [0,0] is the back-left corner, [1,1] is the front-right corner where the player starts. Keep objects away from [0.5, 0.9].
 - size is [width, height, depth] in metres, realistic for the object.
+- elevation is how high the object's bottom sits above the floor in metres. 0 for furniture on the floor; for things on a desk (laptop, monitor, keyboard) use the desk height, usually 0.75, and give them the same pos as the desk.
+- Classrooms and labs: include desks, computers or monitors, chairs, whiteboards and cabinets as simple blocks.
 - Colours are hex strings like "#7a4bff". Use the real colours from the photo, pushed a little brighter for an anime look.
 - lighting is one of: "day", "dusk", "night", "neon".
 - Reply with ONLY one JSON object, no markdown, no explanation.
@@ -36,6 +38,15 @@ JSON format:
       "shape": "box",
       "pos": [0.5, 0.3],
       "size": [1.6, 0.75, 0.8],
+      "color": "#hex",
+      "haunted": false
+    },
+    {
+      "name": "monitor",
+      "shape": "box",
+      "pos": [0.5, 0.3],
+      "size": [0.55, 0.4, 0.08],
+      "elevation": 0.75,
       "color": "#hex",
       "haunted": false
     }

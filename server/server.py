@@ -95,6 +95,7 @@ def clean_level(data):
             "pos": [round(x, 3), round(z, 3)],
             "size": [_num(sz[0], 1, 0.2, 4), _num(sz[1], 1, 0.2, 4), _num(sz[2], 1, 0.2, 4)],
             "color": _hex(obj.get("color"), "#8a7bd8"),
+            "elevation": _num(obj.get("elevation"), 0, 0, 2.5),
             "haunted": bool(obj.get("haunted")),
         }
         if clean["haunted"]:

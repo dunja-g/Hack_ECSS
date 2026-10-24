@@ -1,21 +1,25 @@
 {
   "room_name": "B60: The Midnight Compile",
-  "vibe": "Rows of humming lab machines where crashed builds rise as neon spirits hungry for semicolons.",
-  "size": {"width": 22, "depth": 20, "height": 5},
-  "palette": {"floor": "#2b3a55", "walls": "#1d2440", "accent": "#00f0ff", "fog": "#0b1024"},
-  "lighting": "neon",
+  "vibe": "Rows of humming lab machines where crashed builds rise again.",
+  "size": {"width": 20, "depth": 18, "height": 3.4},
+  "palette": {"floor": "#9a9a94", "walls": "#d8d6cf", "accent": "#3a7bd5", "fog": "#c4c9cd"},
+  "lighting": "day",
   "objects": [
-    {"name": "lab bench row 1", "shape": "box", "pos": [0.3, 0.3], "size": [4.0, 0.9, 1.0], "color": "#4c6ef5", "haunted": false},
-    {"name": "lab bench row 2", "shape": "box", "pos": [0.7, 0.3], "size": [4.0, 0.9, 1.0], "color": "#4c6ef5", "haunted": false},
-    {"name": "server rack", "shape": "box", "pos": [0.9, 0.15], "size": [1.0, 2.2, 1.0], "color": "#212529", "haunted": true,
-     "ghost": {"name": "Segfault-hime", "personality": "cold, precise, crashes everything she touches", "hp": 160, "speed": 2.2}},
-    {"name": "printer", "shape": "box", "pos": [0.1, 0.15], "size": [1.0, 1.1, 0.8], "color": "#e9ecef", "haunted": true,
-     "ghost": {"name": "Paper Jam Oni", "personality": "furious and stuck in a loop", "hp": 100, "speed": 3.0}},
-    {"name": "projector screen", "shape": "box", "pos": [0.5, 0.05], "size": [4.0, 2.5, 0.2], "color": "#f8f9fa", "haunted": false},
-    {"name": "office chair", "shape": "cylinder", "pos": [0.45, 0.55], "size": [0.7, 1.0, 0.7], "color": "#ff6b6b", "haunted": true,
-     "ghost": {"name": "Swivelra", "personality": "lazy but spins wildly when angry", "hp": 90, "speed": 3.6}},
-    {"name": "water cooler", "shape": "cylinder", "pos": [0.85, 0.6], "size": [0.5, 1.4, 0.5], "color": "#74c0fc", "haunted": false},
-    {"name": "lab bench row 3", "shape": "box", "pos": [0.25, 0.7], "size": [3.0, 0.9, 1.0], "color": "#4c6ef5", "haunted": false}
+    {"name": "desk row 1", "shape": "box", "pos": [0.3, 0.3], "size": [4.0, 0.75, 0.9], "color": "#b9a27f", "haunted": false},
+    {"name": "desk row 2", "shape": "box", "pos": [0.7, 0.3], "size": [4.0, 0.75, 0.9], "color": "#b9a27f", "haunted": false},
+    {"name": "desk row 3", "shape": "box", "pos": [0.3, 0.6], "size": [4.0, 0.75, 0.9], "color": "#b9a27f", "haunted": false},
+    {"name": "monitor A", "shape": "box", "pos": [0.25, 0.29], "size": [0.6, 0.42, 0.08], "elevation": 0.75, "color": "#1d1f23", "haunted": true,
+     "ghost": {"name": "Segfault", "personality": "cold and precise", "hp": 110, "speed": 2.4}},
+    {"name": "monitor B", "shape": "box", "pos": [0.35, 0.29], "size": [0.6, 0.42, 0.08], "elevation": 0.75, "color": "#1d1f23", "haunted": false},
+    {"name": "monitor C", "shape": "box", "pos": [0.7, 0.29], "size": [0.6, 0.42, 0.08], "elevation": 0.75, "color": "#1d1f23", "haunted": false},
+    {"name": "laptop", "shape": "box", "pos": [0.32, 0.6], "size": [0.35, 0.03, 0.25], "elevation": 0.75, "color": "#8d9096", "haunted": false},
+    {"name": "server rack", "shape": "box", "pos": [0.92, 0.12], "size": [0.8, 2.0, 1.0], "color": "#2b2e33", "haunted": true,
+     "ghost": {"name": "Kernel Panic", "personality": "loud and furious", "hp": 160, "speed": 2.0}},
+    {"name": "printer", "shape": "box", "pos": [0.08, 0.12], "size": [0.9, 1.0, 0.7], "color": "#e4e4e0", "haunted": true,
+     "ghost": {"name": "Paper Jam", "personality": "stuck in a loop", "hp": 100, "speed": 2.8}},
+    {"name": "whiteboard", "shape": "box", "pos": [0.5, 0.03], "size": [3.0, 1.2, 0.06], "elevation": 0.9, "color": "#f4f4f2", "haunted": false},
+    {"name": "chair", "shape": "box", "pos": [0.7, 0.38], "size": [0.5, 0.9, 0.5], "color": "#3a4a6b", "haunted": false},
+    {"name": "cabinet", "shape": "box", "pos": [0.93, 0.6], "size": [0.6, 1.4, 1.2], "color": "#8b8f94", "haunted": false}
   ],
-  "boss_line": "Your code compiled... but you will NOT run!"
+  "boss_line": "Your code compiled, but you will NOT run."
 }
