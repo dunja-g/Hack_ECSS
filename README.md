@@ -116,7 +116,7 @@ python3 server/server.py
 
 ## Team
 
-Built by Dunja Gvozdenovic and TEAMMATE_NAME at Hacktoberfest Southampton 2026.
+Built by Dunja Gvozdenovic and [Jjho0](https://github.com/Jjho0) at Hacktoberfest Southampton 2026.
 
 ## License
 
