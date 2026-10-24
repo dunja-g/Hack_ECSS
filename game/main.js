@@ -13,7 +13,7 @@ import { makeBooGhost, makeGhostShadow } from './ghost.js';
 import { buildFurniture, inferType, TYPES, WALL_TYPES } from './furniture.js';
 import { isScene, expandScene, SIZES, COLOURS } from './layout.js';
 import { WEAPONS, PRIMARIES, buildWeapon } from './weapons.js';
-import { analysePlan, planPreview, planToLevel, mapHelpers, findPath, WALL } from './floorplan.js';
+import { analysePlan, planPreview, annotatePlan, planToLevel, mapHelpers, findPath, WALL } from './floorplan.js';
 import { STYLES, pickStyle, decorate, glow, floorTexture, wallTexture, grainTexture } from './styles.js';
 
 const STYLE = pickStyle();
@@ -34,7 +34,7 @@ function hex(v, d) { return typeof v === 'string' && HEX.test(v) ? v : d; }
 const LIMITS = {
   desk: [[0.8, 0.65, 0.45], [2.4, 0.95, 1.2]], table: [[0.6, 0.4, 0.5], [3.5, 1.1, 2.0]],
   chair: [[0.4, 0.7, 0.4], [0.8, 1.3, 0.8]], sofa: [[1.2, 0.6, 0.7], [3.2, 1.1, 1.2]],
-  bed: [[1.8, 0.3, 0.9], [2.3, 1.0, 2.2]], shelf: [[0.6, 0.8, 0.25], [2.5, 2.8, 0.6]],
+  bed: [[1.8, 0.3, 0.9], [2.3, 1.0, 2.2]], shelf: [[0.6, 0.8, 0.25], [2.5, 2.8, 0.6]], stack: [[0.6, 1.2, 0.4], [3.2, 2.6, 0.9]],
   cabinet: [[0.4, 0.6, 0.35], [2.5, 2.4, 0.9]], monitor: [[0.35, 0.25, 0.03], [1.0, 0.7, 0.25]],
   laptop: [[0.28, 0.03, 0.18], [0.45, 0.05, 0.35]], tv: [[0.6, 0.35, 0.03], [2.2, 1.3, 0.3]],
   lamp: [[0.15, 0.3, 0.15], [0.6, 2.0, 0.6]], plant: [[0.2, 0.25, 0.2], [1.5, 2.5, 1.5]],
@@ -61,7 +61,7 @@ function cleanLevel(data) {
   const names = ['Kurayami', 'Hollowmi', 'Shirei', 'Yurei-X', 'Onibi', 'Bakeneko-chan'];
   const W = level.size.width, D = level.size.depth;
   if (Array.isArray(data.spawn)) level.spawn = [num(data.spawn[0], 0, -W / 2, W / 2), num(data.spawn[1], 0, -D / 2, D / 2)];
-  for (const o of (Array.isArray(data.objects) ? data.objects : []).slice(0, data.expanded ? 120 : 20)) {
+  for (const o of (Array.isArray(data.objects) ? data.objects : []).slice(0, data.plan_mode ? 400 : data.expanded ? 120 : 20)) {
     if (!o || typeof o !== 'object') continue;
     const pos = Array.isArray(o.pos) && o.pos.length >= 2 ? o.pos : [0.5, 0.5];
     const sz = Array.isArray(o.size) && o.size.length >= 3 ? o.size : [1, 1, 1];
@@ -89,7 +89,7 @@ function cleanLevel(data) {
     }
     if (c.type === 'window' && !o.elevation) c.elevation = 0.9;
     // furniture shows its long side to the room: a deep, narrow shelf is really a wide one turned sideways
-    if (!c.wall && !c.rotation && c.size[2] > c.size[0] * 1.3 && ['shelf', 'cabinet', 'sofa', 'desk', 'bed', 'monitor', 'tv'].includes(c.type)) {
+    if (!c.wall && !c.rotation && c.size[2] > c.size[0] * 1.3 && ['shelf', 'stack', 'cabinet', 'sofa', 'desk', 'bed', 'monitor', 'tv'].includes(c.type)) {
       c.size = [c.size[2], c.size[1], c.size[0]];
       c.rotation = x < 0.5 ? 90 : 270;
     }
@@ -1325,20 +1325,22 @@ document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListene
 
 // Floor plan: walls come straight from the drawing (instant), Gemma reads the room names and scale.
 async function fusePlan() {
-  const plan = analysePlan(await loadImage(photoFile));
+  const planImg = await loadImage(photoFile);
+  const plan = analysePlan(planImg);
   $('preview').src = planPreview(plan).toDataURL();
+  const marked = annotatePlan(planImg, plan); // numbered badges on the coloured blocks, for Gemma to read
   const hintWidth = /(\d+(?:\.\d+)?)\s*m\b/i.exec($('hint').value); // e.g. "26 m wide" overrides the scale
   const t0 = performance.now();
   const timer = setInterval(() => setMsg(`Walls traced. Gemma is reading the room names... ${Math.round((performance.now() - t0) / 1000)}s`, 'busy'), 500);
   let info = null, note = '';
   // the same plan loads instantly the second time (handy to prepare a live demo)
-  const cacheKey = `phantom-plan:${photoFile.name}:${photoFile.size}:${photoFile.lastModified}`;
+  const cacheKey = `phantom-plan2:${photoFile.name}:${photoFile.size}:${photoFile.lastModified}`; // v2: block readings
   try { info = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch { info = null; }
   if (info) note = 'Room names from the last time you used this plan';
   else try {
     const res = await fetch('api/analyze', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: photoData, hint: $('hint').value, mode: 'plan' }),
+      body: JSON.stringify({ image: marked, hint: $('hint').value, mode: 'plan' }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Gemma failed');

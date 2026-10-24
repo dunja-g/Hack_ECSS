@@ -4,11 +4,21 @@ the walls from the drawing. Your job is to READ it: name the rooms, say what eac
 each room is on the drawing, and read the building's real width.
 
 How to read it:
-- rooms: one entry per labelled room or area you can read on the plan (up to 16). Use the label printed in the room.
-  type is one of: study, quiet, library, office, classroom, lab, meeting, group, cafe, kitchen, lobby, foyer,
-  corridor, toilet, storage, stairs, plant, other.
+- rooms: one entry per labelled room, area OR labelled block you can read on the plan (up to 24). Use the label
+  printed on it. Many plans, especially library and wayfinding maps, paint furniture as solid coloured blocks with
+  a label on them: list every such block too. Examples: a block marked "Periodicals" or "P - PM" or "N - NX"
+  (shelving by call number) is type "shelves"; "Workstations" is "workstations"; "Group Study Room 1015" is
+  "study_room"; "Stairs", "Lift" and "Toilets" are "stairs", "lift" and "toilets".
+  type is one of: shelves, workstations, study_room, study, quiet, library, office, classroom, lab, meeting, group,
+  cafe, kitchen, lobby, foyer, corridor, toilets, storage, stairs, lift, plant, other.
   box is the room's rectangle on the drawing as [left, top, right, bottom], each a fraction of the image from 0 to 1
   ([0,0] is the top-left corner of the image, [1,1] the bottom-right). Be generous rather than too small.
+- legend: if the plan has a key, list each entry as {"label": "...", "type": one of the types above}. For example
+  "Journals - Rolling Stacks" is "shelves" and "Group Study Area" is "study".
+- blocks: the game has put a numbered RED badge on each solid coloured block it found. For EVERY badge, add
+  {"n": <the badge number>, "label": "<the words printed on that block>", "type": <one of the types above>}.
+  Read the label on the block the badge sits on (it is usually in the middle of that block). A badge on an
+  unlabelled block: use the legend colour it matches, else type "other".
 - building_width_m: the real left-to-right width of the drawn building in metres. Dimension labels on plans are
   usually millimetres (8399 means 8.4 m); use them and the room sizes to estimate. A typical teaching floor is 20 to 50 m.
 - Choose 2 to 4 kinds of furniture to be HAUNTED (desk, table, shelf, plant, chair, sofa). A ghost lives inside and
@@ -27,8 +37,12 @@ Example (for a different building):
     {"name": "Computer Lab", "type": "lab", "box": [0.05, 0.08, 0.45, 0.55]},
     {"name": "Seminar Room 2", "type": "meeting", "box": [0.5, 0.08, 0.7, 0.4]},
     {"name": "Reception", "type": "lobby", "box": [0.45, 0.6, 0.8, 0.95]},
-    {"name": "Kitchenette", "type": "kitchen", "box": [0.8, 0.1, 0.97, 0.45]}
+    {"name": "Kitchenette", "type": "kitchen", "box": [0.8, 0.1, 0.97, 0.45]},
+    {"name": "A - Z", "type": "shelves", "box": [0.06, 0.6, 0.12, 0.9]},
+    {"name": "Stairs", "type": "stairs", "box": [0.88, 0.62, 0.97, 0.75]}
   ],
+  "legend": [{"label": "Book stacks", "type": "shelves"}, {"label": "Open study area", "type": "study"}],
+  "blocks": [{"n": 1, "label": "A - Z", "type": "shelves"}, {"n": 2, "label": "Stairs", "type": "stairs"}],
   "haunted": [
     {"object": "desk", "ghost": {"name": "Blue Screen", "personality": "crashes at the worst moment", "hp": 110, "speed": 2.4}},
     {"object": "table", "ghost": {"name": "Agenda Item", "personality": "never lets a meeting end", "hp": 140, "speed": 2.0}}

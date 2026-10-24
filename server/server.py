@@ -112,7 +112,7 @@ def clean_plan(data):
         raise ValueError("model reply is not a JSON object")
     text = lambda v, n: str(v)[:n] if v is not None else None
     rooms = []
-    for r in (data.get("rooms") or [])[:16]:
+    for r in (data.get("rooms") or [])[:24]:
         box = r.get("box") if isinstance(r, dict) else None
         if not (isinstance(box, list) and len(box) == 4):
             continue
@@ -135,6 +135,10 @@ def clean_plan(data):
                     (("floor", "#9aa3a8"), ("walls", "#efede8"), ("accent", "#d0643a"), ("fog", "#dfe3e6"))},
         "lighting": data.get("lighting") if data.get("lighting") in LIGHTING else "day",
         "rooms": rooms,
+        "legend": [{"label": text(e.get("label"), 60), "type": text(e.get("type"), 20)}
+                   for e in (data.get("legend") or [])[:8] if isinstance(e, dict)],
+        "blocks": [{"n": int(_num(b.get("n"), 0, 0, 999)), "label": text(b.get("label"), 60), "type": text(b.get("type"), 20)}
+                   for b in (data.get("blocks") or [])[:60] if isinstance(b, dict)],
         "haunted": haunted,
     }
 

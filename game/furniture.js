@@ -3,7 +3,7 @@
 // Every model stands on y = 0, is centred on x/z and faces +z.
 import * as THREE from 'three';
 
-export const TYPES = ['desk', 'table', 'chair', 'sofa', 'bed', 'shelf', 'cabinet', 'monitor', 'laptop', 'tv',
+export const TYPES = ['desk', 'table', 'chair', 'sofa', 'bed', 'shelf', 'stack', 'cabinet', 'monitor', 'laptop', 'tv',
   'lamp', 'plant', 'whiteboard', 'door', 'window', 'box'];
 export const WALL_TYPES = ['whiteboard', 'door', 'window'];
 
@@ -139,6 +139,35 @@ export function buildFurniture(o, kit) {
       });
       inst.castShadow = inst.receiveShadow = true;
       root.add(inst);
+      break;
+    }
+    case 'stack': {
+      // a library range: double-sided bookcase, books on both faces. Few draw calls, because a floor plan
+      // of a library can hold hundreds of metres of shelving.
+      const side = 0.03, rows = Math.max(2, Math.round(h / 0.36));
+      box(w, side, d, main, 0, h - side / 2, 0); box(w, 0.08, d, dark, 0, 0.04, 0);
+      for (const s of [-1, 1]) box(side, h, d, main, s * (w / 2 - side / 2), h / 2, 0);
+      box(w - side * 2, h - 0.1, 0.02, dark, 0, h / 2, 0, false); // the spine down the middle
+      const boards = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), main, rows - 1);
+      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), col = new THREE.Color();
+      for (let r = 1; r < rows; r++) boards.setMatrixAt(r - 1, m4.compose(new THREE.Vector3(0, (h / rows) * r, 0), q, new THREE.Vector3(w - side * 2, side, d)));
+      boards.receiveShadow = true; root.add(boards);
+      const books = [];
+      for (const face of [-1, 1]) for (let r = 0; r < rows; r++) {
+        const y = (h / rows) * r + 0.08;
+        let x = -w / 2 + side + 0.02;
+        while (x < w / 2 - side - 0.06) {
+          const bw = 0.03 + Math.random() * 0.04, bh = Math.min(h / rows - 0.06, 0.18 + Math.random() * 0.1);
+          if (Math.random() < 0.85) books.push([x + bw / 2, y + bh / 2, face * d / 4, bw, bh]);
+          x += bw + 0.005;
+        }
+      }
+      const inst = new THREE.InstancedMesh(bookGeo, kit.paint('#ffffff', { rough: 0.8 }), books.length);
+      books.forEach(([bx, by, bz, bw, bh], i) => {
+        inst.setMatrixAt(i, m4.compose(new THREE.Vector3(bx, by, bz), q, new THREE.Vector3(bw, bh, d * 0.42)));
+        inst.setColorAt(i, col.set(BOOK_COLOURS[(Math.random() * BOOK_COLOURS.length) | 0]));
+      });
+      inst.castShadow = inst.receiveShadow = true; root.add(inst);
       break;
     }
     case 'cabinet': {

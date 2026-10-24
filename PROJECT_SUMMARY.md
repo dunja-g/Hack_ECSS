@@ -33,6 +33,7 @@ GitHub: https://github.com/dunja-g/Hack_ECSS (branch `main`, latest commit `dd2b
 | 14 | Weapons / 武器 | 4 primaries (rifle, SMG, shotgun, sniper) picked on the briefing screen, a pistol, and a butterfly knife; switch with 1/2/3, Q or the wheel | 4 把主武器（步槍、SMG、霰彈槍、狙擊槍）在簡報畫面選擇，加上手槍和蝴蝶刀；用 1/2/3、Q 或滾輪切換 |
 | 15 | Butterfly knife / 蝴蝶刀 | Real balisong rig with a gloved hand; CS2-style draw, 5 s inspect (F), alternating slashes and a heavy stab | 真正的蝴蝶刀骨架和戴手套的手；CS2 風格的拔刀、5 秒檢視（F）、正反手揮砍和重刺 |
 | 16 | Halloween night / 萬聖節夜晚 | New default look: moonlight, fog, dying ceiling lights, a flashlight (L), jack-o'-lanterns, candles, cobwebs, wisps | 新的預設畫面：月光、霧氣、快壞掉的燈、手電筒（L）、南瓜燈、蠟燭、蜘蛛網、鬼火 |
+| 17 | Library and colour-coded plans / 圖書館與彩色導覽圖 | Coloured blocks are detected and badged for Gemma to read; stacks become rows of book shelving, plus workstations, study rooms and stair cores | 偵測色塊並加上編號讓 Gemma 讀取；書庫變成一排排書架，還有電腦區、討論室和樓梯結構 |
 
 ---
 

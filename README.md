@@ -121,6 +121,8 @@ Pick **Floor plan** above the upload box and drop in an architectural floor plan
 2. Gemma reads the room labels ("Open Study Space", "Meeting Room") and where they are.
 3. Each room is furnished from a template (study desks, meeting tables, cafe tables), and ghosts path-find through the doorways. A ghost that cannot find a way in phases through the wall.
 
+Colour-coded maps (library and wayfinding plans) work too. Solid coloured blocks such as book stacks, workstations, study rooms and stairs are found by colour and given numbered badges before Gemma sees the plan, so Gemma only has to read "badge 3 is Periodicals". Each block is then built for what it is: shelving becomes rows of double-sided book stacks with aisles, workstations become computer desks, study rooms get walls, a door and a table, and stairs, lifts and toilets become solid cores.
+
 The scale comes from the drawing's wall thickness. If the size looks wrong, type the real width in the wish box, for example `26 m`. Gemma's reading is remembered per file, so the same plan loads instantly the second time.
 
 ## Testing without Gemma

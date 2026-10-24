@@ -43,6 +43,49 @@ function flood(grid, cols, rows, start, pass, label, labels) {
   return n;
 }
 
+// Solid coloured blocks: colours are binned, the floor (the most common colour inside the drawing) and
+// the white background are skipped, and each large, mostly rectangular patch of one colour is a block.
+function findZones(px, w, h) {
+  const bin = (i) => ((px[i * 4] >> 4) << 8) | ((px[i * 4 + 1] >> 4) << 4) | (px[i * 4 + 2] >> 4);
+  const isBackground = (i) => px[i * 4] > 232 && px[i * 4 + 1] > 232 && px[i * 4 + 2] > 232;
+  const isInk = (i) => { // black or grey linework and text: never a block
+    const r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2], sat = Math.max(r, g, b) - Math.min(r, g, b);
+    return sat < 24 && (r + g + b) / 3 < 200;
+  };
+  const counts = new Map();
+  for (let i = 0; i < w * h; i += 3) if (!isBackground(i) && !isInk(i)) { const k = bin(i); counts.set(k, (counts.get(k) || 0) + 1); }
+  let floor = -1, best = 0;
+  for (const [k, n] of counts) if (n > best) { best = n; floor = k; }
+  const near = (a, b) => Math.abs((a >> 8) - (b >> 8)) <= 1 && Math.abs(((a >> 4) & 15) - ((b >> 4) & 15)) <= 1 && Math.abs((a & 15) - (b & 15)) <= 1;
+  const seen = new Uint8Array(w * h), zones = [], minArea = w * h * 0.0018;
+  for (let start = 0; start < w * h; start++) {
+    if (seen[start] || isBackground(start) || isInk(start)) continue;
+    const key = bin(start);
+    if (near(key, floor)) { seen[start] = 1; continue; }
+    const stack = [start], members = []; seen[start] = 1;
+    let x0 = w, x1 = 0, y0 = h, y1 = 0, rs = 0, gs = 0, bs = 0;
+    while (stack.length) {
+      const i = stack.pop(); members.push(i);
+      const x = i % w, y = (i / w) | 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      rs += px[i * 4]; gs += px[i * 4 + 1]; bs += px[i * 4 + 2];
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) {
+        if (j >= 0 && !seen[j] && near(bin(j), key)) { seen[j] = 1; stack.push(j); }
+      }
+    }
+    const n = members.length, bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    // big enough, solid enough (lettering and stair drawings leave holes), and not a thin line
+    if (n < minArea || n / (bw * bh) < 0.25 || Math.min(bw, bh) < 10) continue; // the real cells are kept, so an L-shape is fine
+    const r = rs / n, g = gs / n, b = bs / n;
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255, sat = (Math.max(r, g, b) - Math.min(r, g, b)) / 255;
+    if (lum > 0.92 || n > w * h * 0.25) continue; // paper, page margins, or the whole floor
+    if (lum > 0.76 && sat < 0.45) continue;        // a pale pastel fill colours a ROOM, not a piece of furniture
+    zones.push({ x0, y0, x1, y1, area: n, members, color: '#' + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join(''),
+      lum: (0.299 * r + 0.587 * g + 0.114 * b) / 255 });
+  }
+  return zones;
+}
+
 // Turn a floor-plan image into a wall grid and a list of rooms.
 export function analysePlan(img, { maxSide = 1600, cellPx = 4, sealFrac = 0.022, darkness = 0.72, minThick = 3.5, stroke = 1 } = {}) {
   const k = Math.min(2, maxSide / Math.max(img.width, img.height));
@@ -53,9 +96,19 @@ export function analysePlan(img, { maxSide = 1600, cellPx = 4, sealFrac = 0.022,
   g.drawImage(img, 0, 0, w, h);
   const px = g.getImageData(0, 0, w, h).data;
 
+  // 0. coloured blocks: wayfinding maps paint shelving, workstations, study rooms and stairs as solid
+  //    blocks of colour on a floor colour. Find them first, so they become furniture, not walls.
+  const zones = findZones(px, w, h);
+  // the blocks' own pixels plus a 2 px rim (their outlines); never their whole bounding box, which could
+  // reach across a real wall
+  let inZone = new Uint8Array(w * h);
+  for (const z of zones) for (const i of z.members) inZone[i] = 1;
+  inZone = morph(inZone, w, h, 2, false);
+
   // 1. dark pixels: walls, but also text, dimension lines and furniture outlines
   const dark = new Uint8Array(w * h);
   for (let i = 0; i < dark.length; i++) {
+    if (inZone[i]) continue; // a block's own outline and lettering are not walls
     const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
     const lum = (0.299 * r + 0.587 * gg + 0.114 * b) / 255, sat = Math.max(r, gg, b) - Math.min(r, gg, b);
     dark[i] = lum < darkness && sat < 90 ? 1 : 0; // grey/black only: coloured arrows and fills are not walls
@@ -187,7 +240,41 @@ export function analysePlan(img, { maxSide = 1600, cellPx = 4, sealFrac = 0.022,
   runs.sort((a, b) => a - b);
   const wallPx = runs.length ? runs[(runs.length / 2) | 0] : 6;
 
-  return { cols, rows, cellPx, imgW: w, imgH: h, grid, roomOf, rooms: kept, leaked, wallPx, canvas };
+  // each block keeps the grid cells it really covers (an L-shaped run of shelving is not its bounding box),
+  // and blocks outside the building (a page header, the legend) are dropped
+  for (const z of zones) {
+    const per = new Map();
+    for (const i of z.members) { const c = Math.floor(((i / w) | 0) / cellPx) * cols + Math.floor((i % w) / cellPx); per.set(c, (per.get(c) || 0) + 1); }
+    z.cells = [...per].filter(([, n]) => n >= cellPx * cellPx * 0.35).map(([c]) => c);
+    z.mx = z.cells.reduce((s, c) => s + (c % cols), 0) / (z.cells.length || 1);         // centre of the real cells
+    z.my = z.cells.reduce((s, c) => s + ((c / cols) | 0), 0) / (z.cells.length || 1);
+    delete z.members;
+    Object.assign(z, { cx0: Math.floor(z.x0 / cellPx), cy0: Math.floor(z.y0 / cellPx), cx1: Math.floor(z.x1 / cellPx), cy1: Math.floor(z.y1 / cellPx) });
+  }
+  const insideZones = zones.filter((z) => {
+    const c = Math.round(z.my) * cols + Math.round(z.mx);
+    return z.cells.length && grid[c] !== OUTSIDE;
+  });
+  zones.length = 0; zones.push(...insideZones);
+  return { cols, rows, cellPx, imgW: w, imgH: h, grid, roomOf, rooms: kept, leaked, wallPx, canvas, zones };
+}
+
+// Set-of-mark prompting: a numbered red badge on every coloured block, so Gemma only has to read
+// "badge 3 sits on the block labelled Periodicals" instead of guessing coordinates.
+export function annotatePlan(img, plan, maxSide = 1280) {
+  const k = Math.min(1, maxSide / Math.max(img.width, img.height));
+  const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+  const sx = c.width / plan.imgW, sy = c.height / plan.imgH, r = Math.max(9, Math.round(c.width / 90));
+  plan.zones.forEach((z, i) => {
+    // inside the block's top-left corner, clear of the label that usually sits in its middle
+    const x = (z.x0 + Math.min(z.x1 - z.x0, 6 * r) * 0.3) * sx + r, y = (z.y0 + Math.min(z.y1 - z.y0, 6 * r) * 0.3) * sy + r;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fillStyle = '#e0001b'; g.fill(); g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
+    g.fillStyle = '#fff'; g.font = `bold ${Math.round(r * 1.25)}px Arial, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(String(i + 1), x, y + 1);
+  });
+  return c.toDataURL('image/jpeg', 0.9);
 }
 
 // Quick picture of what was detected, for the upload card: walls black, rooms tinted.
@@ -201,6 +288,9 @@ export function planPreview(plan) {
     img.data.set([r, gg, b, 255], i * 4);
   }
   g.putImageData(img, 0, 0);
+  // coloured blocks found on the plan, outlined in their own colour
+  g.lineWidth = 1;
+  for (const z of plan.zones || []) { g.fillStyle = z.color + 'cc'; g.fillRect(z.cx0, z.cy0, z.cx1 - z.cx0 + 1, z.cy1 - z.cy0 + 1); }
   return c;
 }
 
@@ -264,12 +354,30 @@ export function findPath(nav, from, to) {
 
 // ------------------------------------------------------------------ plan -> level
 // Room kinds Gemma can name, and how each is furnished.
-const ROOM_KIND = {
-  study: 'desks', office: 'desks', classroom: 'desks', lab: 'desks', quiet: 'desks',
-  library: 'shelves', meeting: 'meeting', group: 'meeting',
-  cafe: 'cafe', kitchen: 'cafe', canteen: 'cafe',
-  lobby: 'lounge', foyer: 'lounge', reception: 'lounge', lounge: 'lounge',
-};
+// What a label means. Checked in order, most specific first ("Group Study Room" is a room, "Group Study
+// Area" is open floor with desks, "P - PM" is a run of shelving by call number).
+const KIND_RULES = [
+  ['core', /stair|lift|elevator|toilet|\bwc\b|restroom|washroom|riser|plant room|electric|cleaner/],
+  ['study_room', /study.?room|group.?room|seminar|pod\b|booth/],
+  ['shelves', /shel|stack|periodical|journal|book|microf|atlas|reference|collection|pamphlet|archive|librar|report/],
+  ['workstations', /workstation|computer|\bpcs?\b|\bit\b|terminal|print/],
+  ['desks', /study area|open study|reading area|silent study/],
+  ['meeting', /meeting|group|conference|board/],
+  ['desks', /study|quiet|office|classroom|\blab\b|reading|silent|desk/],
+  ['cafe', /caf|coffee|kitchen|canteen|dining|social|refectory/],
+  ['lounge', /lobby|foyer|reception|lounge|entrance|corridor|hall|atrium/],
+];
+const CALL_NUMBERS = /^\s*[a-z]{1,3}\s*[-–—]\s*[a-z]{1,3}\s*$/i; // "P - PM", "N-NX": library call-number ranges
+function kindOf(type, name) {
+  if (CALL_NUMBERS.test(name || '')) return 'shelves';
+  const typed = String(type || '').toLowerCase();
+  if (['stairs', 'lift', 'toilets'].includes(typed)) return 'core';
+  if (['shelves', 'study_room', 'workstations'].includes(typed)) return typed;
+  const t = `${name || ''} ${typed}`.toLowerCase();
+  for (const [kind, re] of KIND_RULES) if (re.test(t)) return kind;
+  return 'none';
+}
+const BLOCK_KINDS = ['core', 'study_room', 'shelves', 'workstations'];
 
 // plan: from analysePlan. info: Gemma's reading of the plan (may be null). Returns a level for cleanLevel().
 export function planToLevel(plan, info, { SIZES, COLOURS, widthOverride = null } = {}) {
@@ -284,12 +392,26 @@ export function planToLevel(plan, info, { SIZES, COLOURS, widthOverride = null }
   const grid = new Uint8Array(cols * rows);
   for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) grid[y * cols + x] = plan.grid[(y + r0) * plan.cols + x + c0];
 
-  // 2. scale: metres per cell. Partition walls are about 0.1 m thick in real life, which gives a solid
-  //    estimate straight from the drawing; Gemma's reading is used only when it roughly agrees.
+  // 1b. name every coloured block from Gemma's badge readings (badge n = block n), else from the legend
+  const readings = new Map((Array.isArray(info.blocks) ? info.blocks : []).map((b) => [Number(b.n), b]));
+  const libraryish = /librar|stack|periodical|shel|book/i.test(JSON.stringify([info.room_name, info.rooms, info.legend, info.blocks]));
+  const blocks = (plan.zones || []).map((z, i) => {
+    const rd = readings.get(i + 1);
+    let kind = rd ? kindOf(rd.type, rd.label) : 'none';
+    if (kind === 'none' && libraryish && !rd) kind = 'shelves'; // an unread block on a library plan is shelving
+    return { ...z, kind, name: (rd && rd.label) || (kind === 'shelves' ? 'stacks' : 'block') };
+  });
+
+  // 2. scale: metres per cell. Best cue: a staircase is about 3 m wide. Next: partition walls are about
+  //    0.1 m thick. Gemma's own estimate is blended in only when it roughly agrees.
   const fromWalls = cols * plan.cellPx * (0.1 / Math.max(2, plan.wallPx));
+  const stairSides = blocks.filter((b) => b.kind === 'core' && /stair/i.test(b.name)).map((b) => Math.min(b.cx1 - b.cx0 + 1, b.cy1 - b.cy0 + 1)).sort((x, y) => x - y);
+  const fromStairs = stairSides.length ? cols * (3.0 / stairSides[stairSides.length >> 1]) : 0;
   const fromGemma = Number(info.building_width_m);
-  const agrees = fromGemma > fromWalls * 0.7 && fromGemma < fromWalls * 1.4;
-  const widthM = Math.max(12, Math.min(80, Number(widthOverride) || (agrees ? fromGemma : fromWalls)));
+  let guess;
+  if (fromStairs) guess = fromGemma > fromStairs * 0.6 && fromGemma < fromStairs * 1.6 ? Math.sqrt(fromStairs * fromGemma) : fromStairs;
+  else guess = fromGemma > fromWalls * 0.7 && fromGemma < fromWalls * 1.4 ? fromGemma : fromWalls;
+  const widthM = Math.max(12, Math.min(90, Number(widthOverride) || guess));
   const cellM = widthM / cols;
   const W = cols * cellM, D = rows * cellM;
   const toWorld = (x, y) => [(x + 0.5) * cellM - W / 2, (y + 0.5) * cellM - D / 2];
@@ -330,6 +452,93 @@ export function planToLevel(plan, info, { SIZES, COLOURS, widthOverride = null }
     return o;
   };
 
+  // 3b. build every coloured block for what it is
+  const boxOf = (cells) => { let x0 = cols, x1 = 0, y0 = rows, y1 = 0; for (const c of cells) { const x = c % cols, y = (c / cols) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } return { x0, x1, y0, y1 }; };
+  const inBlock = new Int16Array(cols * rows).fill(-1);
+  const cellsOf = (z) => {
+    const raw = z.cells.map((c) => { const x = (c % plan.cols) - c0, y = ((c / plan.cols) | 0) - r0; return x >= 0 && y >= 0 && x < cols && y < rows ? y * cols + x : -1; }).filter((c) => c >= 0);
+    if (!raw.length) return raw;
+    // the label printed on a block leaves holes in it: close them (dilate, then erode) inside its box
+    const bb = boxOf(raw), pad = 5, bw = bb.x1 - bb.x0 + 1 + pad * 2, bh = bb.y1 - bb.y0 + 1 + pad * 2;
+    const m = new Uint8Array(bw * bh);
+    for (const c of raw) m[((c / cols | 0) - bb.y0 + pad) * bw + (c % cols) - bb.x0 + pad] = 1;
+    const closed = morph(morph(m, bw, bh, 4, false), bw, bh, 4, true);
+    const out = [];
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      const gx = x + bb.x0 - pad, gy = y + bb.y0 - pad;
+      if (closed[y * bw + x] && gx >= 0 && gy >= 0 && gx < cols && gy < rows && grid[gy * cols + gx] !== OUTSIDE) out.push(gy * cols + gx);
+    }
+    return out;
+  };
+  const builtBlocks = [];
+  blocks.forEach((b, bi) => {
+    const cells = cellsOf(b);
+    if (!cells.length) return;
+    for (const c of cells) { inBlock[c] = bi; taken[c] = 1; }
+    const bb = boxOf(cells);
+    const [ax, az] = toWorld(bb.x0, bb.y0), [bx, bz] = toWorld(bb.x1, bb.y1);
+    const wide = bx - ax, deep = bz - az;
+    const inside = (wx, wz) => { const [x, y] = toCell(wx, wz); return x >= 0 && y >= 0 && x < cols && y < rows && inBlock[y * cols + x] === bi; };
+    const footprintInside = (wx, wz, w, d) => inside(wx - w / 2, wz - d / 2) && inside(wx + w / 2, wz - d / 2) && inside(wx - w / 2, wz + d / 2) && inside(wx + w / 2, wz + d / 2) && inside(wx, wz);
+    builtBlocks.push({ ...bb, name: b.name, kind: b.kind });
+
+    if (b.kind === 'core') { // stairs, lifts, toilets: solid, you walk round them
+      for (const c of cells) grid[c] = WALL;
+    } else if (b.kind === 'shelves') {
+      // library ranges: double-sided stacks across the block's short side, 0.9 m aisles between them
+      const [, sh, sd] = SIZES.stack, pitch = sd + 0.95, steel = b.lum > 0.55; // pale blocks are rolling stacks
+      const across = wide <= deep; // ranges run along x when the block is tall
+      const len = (across ? wide : deep) - 0.2, run = across ? deep : wide;
+      const segs = Math.max(1, Math.ceil(len / 2.4)), segLen = len / segs;
+      for (let t = 0.5 + sd / 2; t <= run - sd / 2 - 0.1; t += pitch) {
+        for (let k = 0; k < segs; k++) {
+          const u = -len / 2 + segLen * (k + 0.5);
+          const wx = across ? (ax + bx) / 2 + u : ax + t, wz = across ? az + t : (az + bz) / 2 + u;
+          if (!footprintInside(wx, wz, across ? segLen : sd, across ? sd : segLen)) continue;
+          place('stack', steel ? 'rolling stack' : 'bookshelf range', wx, wz, b.name, { rot: across ? 0 : 90, size: [segLen - 0.04, sh, sd], color: steel ? '#8d949b' : '#9a6a3c' });
+        }
+      }
+    } else if (b.kind === 'workstations') {
+      // computer desks in back-to-back pairs, monitors on top, a chair at each
+      const [dw, dh, dd] = SIZES.desk;
+      const rowPitch = dd * 2 + 1.4, nRows = Math.max(1, Math.floor((deep + 1.4) / rowPitch));
+      for (let r = 0; r < nRows; r++) {
+        const z = (az + bz) / 2 + (r - (nRows - 1) / 2) * rowPitch;
+        for (let x = ax + dw / 2 + 0.2; x <= bx - dw / 2 - 0.2; x += dw + 0.1) {
+          for (const side of [-1, 1]) {
+            const zz = z + side * dd / 2;
+            if (!footprintInside(x, zz, dw, dd)) continue;
+            place('desk', 'computer desk', x, zz, b.name, { rot: side > 0 ? 0 : 180 });
+            place('monitor', 'monitor', x, zz - side * 0.15, b.name, { elevation: dh, rot: side > 0 ? 0 : 180, size: [0.55, 0.42, 0.05] });
+            place('chair', 'chair', x, zz + side * (dd / 2 + 0.35), b.name, { rot: side > 0 ? 180 : 0 });
+          }
+        }
+      }
+    } else if (b.kind === 'study_room' || b.kind === 'meeting') {
+      // one block may hold a row of rooms (study rooms 1015, 1013, 1011, 1009): split it into squarish rooms,
+      // put walls round each with a door, and a table with chairs inside
+      const longX = wide >= deep, n = Math.max(1, Math.round((longX ? wide : deep) / Math.max(2.4, longX ? deep : wide)));
+      for (let r = 0; r < n; r++) {
+        const rx0 = longX ? ax + (wide / n) * r : ax, rx1 = longX ? ax + (wide / n) * (r + 1) : bx;
+        const rz0 = longX ? az : az + (deep / n) * r, rz1 = longX ? bz : az + (deep / n) * (r + 1);
+        const [cx0, cy0] = toCell(rx0, rz0), [cx1, cy1] = toCell(rx1, rz1);
+        const doorX = Math.round((cx0 + cx1) / 2), doorW = Math.max(2, Math.round(0.9 / cellM));
+        for (let y = cy0; y <= cy1; y++) for (let x = cx0; x <= cx1; x++) {
+          const i = y * cols + x;
+          if (i < 0 || i >= grid.length || inBlock[i] !== bi) continue;
+          const edge = x === cx0 || x === cx1 || y === cy0 || y === cy1;
+          const door = y === cy0 && Math.abs(x - doorX) <= doorW / 2; // the door opens on the block's top side
+          if (edge && !door) grid[i] = WALL;
+        }
+        const tx = (rx0 + rx1) / 2, tz = (rz0 + rz1) / 2 + 0.2, tw = Math.min(1.6, (rx1 - rx0) - 1.4), td = Math.min(0.9, (rz1 - rz0) - 1.6);
+        if (tw < 0.6 || td < 0.5) continue;
+        place('table', 'study table', tx, tz, b.name, { size: [tw, 0.75, td] });
+        place('chair', 'chair', tx, tz - td / 2 - 0.3, b.name);
+        place('chair', 'chair', tx, tz + td / 2 + 0.3, b.name, { rot: 180 });
+      }
+    }
+  });
+
   // 4. rooms: Gemma's labelled boxes, or the detected areas if Gemma could not help
   const totalRoomCells = plan.rooms.reduce((sum, r) => sum + r.cells, 0) || 1;
   let rooms = (Array.isArray(info.rooms) ? info.rooms : []).map((r) => {
@@ -338,6 +547,7 @@ export function planToLevel(plan, info, { SIZES, COLOURS, widthOverride = null }
     // box is in fractions of the whole image; convert to cropped cells
     const x0 = Math.round(b[0] * plan.cols) - c0, y0 = Math.round(b[1] * plan.rows) - r0;
     const x1 = Math.round(b[2] * plan.cols) - c0, y1 = Math.round(b[3] * plan.rows) - r0;
+    if (BLOCK_KINDS.includes(kindOf(r.type, r.name)) && blocks.length) return null; // built from its badge above
     const room = { name: String(r.name || 'room').slice(0, 40), kind: kindOf(r.type, r.name), x0: Math.max(0, Math.min(x0, x1)), y0: Math.max(0, Math.min(y0, y1)), x1: Math.min(cols - 1, Math.max(x0, x1)), y1: Math.min(rows - 1, Math.max(y0, y1)) };
     // Gemma's boxes are rough: snap to the walled room the box is centred in, when there is a clear one
     const mx = Math.round((room.x0 + room.x1) / 2) + c0, my = Math.round((room.y0 + room.y1) / 2) + r0;
@@ -413,7 +623,7 @@ export function planToLevel(plan, info, { SIZES, COLOURS, widthOverride = null }
       for (const [x, z] of spots(false)) { if (n < 2 && fits(x, z, 0.7, 0.7, 0.5)) { place('plant', 'potted plant', x, z, room.name); n++; } }
     }
   }
-  // big open floor left empty (cafe corners often have no text label): cafe tables
+  // big open floor left empty (cafe corners often have no text label): cafe tables, or study desks in a library
   const covered = (x, y) => { const [wx, wz] = toWorld(x, y); return objects.some((o) => Math.hypot(o.at[0] - wx, o.at[1] - wz) < 3); };
   const pitch = Math.max(1, Math.round(2.8 / cellM));
   let cafes = 0;
@@ -422,12 +632,17 @@ export function planToLevel(plan, info, { SIZES, COLOURS, widthOverride = null }
     if (grid[i] !== FREE || dist[i] * cellM < 2.0 || covered(x, y)) continue;
     const [wx, wz] = toWorld(x, y);
     if (!fits(wx, wz, 2.0, 2.0, 0.3)) continue;
-    place('table', 'round cafe table', wx, wz, 'open floor', { size: [0.9, 0.75, 0.9], color: '#e8e4dc' });
-    place('chair', 'chair', wx, wz - 0.75, 'open floor');
-    place('chair', 'chair', wx, wz + 0.75, 'open floor', { rot: 180 });
+    if (libraryish) { // a reading table with four seats
+      place('table', 'reading table', wx, wz, 'open floor', { size: [1.6, 0.75, 0.9], color: '#c99a62' });
+      for (const s of [-1, 1]) { place('chair', 'chair', wx - 0.4, wz + s * 0.75, 'open floor', { rot: s > 0 ? 180 : 0 }); place('chair', 'chair', wx + 0.4, wz + s * 0.75, 'open floor', { rot: s > 0 ? 180 : 0 }); }
+    } else {
+      place('table', 'round cafe table', wx, wz, 'open floor', { size: [0.9, 0.75, 0.9], color: '#e8e4dc' });
+      place('chair', 'chair', wx, wz - 0.75, 'open floor');
+      place('chair', 'chair', wx, wz + 0.75, 'open floor', { rot: 180 });
+    }
     cafes++;
   }
-  if (objects.length > 220) objects.length = 220;
+  if (objects.length > 380) objects.length = 380;
 
   // 6. where the player starts: the most open spot of the lobby / foyer, else the most open spot anywhere
   const lobby = rooms.find((r) => r.kind === 'lounge');
@@ -461,16 +676,7 @@ export function planToLevel(plan, info, { SIZES, COLOURS, widthOverride = null }
     boss_line: info.boss_line, palette: info.palette, lighting: info.lighting || 'day',
     size: { width: W, depth: D, height: 3.0 }, objects, spawn, expanded: true, plan_mode: true,
   };
-  return { level, map: { grid, cols, rows, cellM, W, D }, rooms };
-}
-
-function kindOf(type, name) {
-  const t = `${type || ''} ${name || ''}`.toLowerCase();
-  for (const key of Object.keys(ROOM_KIND)) if (t.includes(key)) return ROOM_KIND[key];
-  if (/work|desk|it suite|computer/.test(t)) return 'desks';
-  if (/caf|coffee|dining|social/.test(t)) return 'cafe';
-  if (/entrance|corridor|hall|lift|stair/.test(t)) return 'lounge';
-  return 'none';
+  return { level, map: { grid, cols, rows, cellM, W, D }, rooms, blocks: builtBlocks };
 }
 
 // Helpers the game uses at run time.
