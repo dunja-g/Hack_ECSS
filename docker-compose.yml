@@ -44,6 +44,10 @@ services:
     container_name: phantom-game
     ports:
       - "8081:8081"
+    volumes:
+      # live edits: change game files, then just refresh the browser
+      - ./game:/app/game:ro
+      - ./server:/app/server:ro
     environment:
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - GEMMA_MODEL=${GEMMA_MODEL:-gemma4:e4b-it-qat}

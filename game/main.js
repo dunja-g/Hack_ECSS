@@ -248,7 +248,7 @@ function buildWorld(lv) {
     world.add(mesh);
     solids.push({ box: new THREE.Box3().setFromObject(mesh), mesh });
 
-    const label = textSprite(o.name, { scale: 1.4 });
+    const label = textSprite(o.name, { scale: 2.0 });
     label.position.set(x, h + 0.45, z);
     label.material.opacity = o.haunted ? 1 : 0.55;
     world.add(label);
@@ -286,9 +286,10 @@ flash.position.set(0, 0.02, -0.58); flash.visible = false; flash.raycast = () =>
 const flashLight = new THREE.PointLight('#ffd27a', 0, 6);
 flashLight.position.copy(flash.position);
 gun.add(flash, flashLight);
-const GUN_REST = new THREE.Vector3(0.2, -0.19, -0.42);
+const GUN_REST = new THREE.Vector3(0.17, -0.16, -0.36);
 gun.position.copy(GUN_REST);
-gun.scale.setScalar(0.6);
+gun.scale.setScalar(0.45);
+gun.rotation.y = -0.04;
 camera.add(gun);
 
 const weapon = { mag: 25, size: 25, reloadT: 0, fireCd: 0, recoil: 0, shooting: false };
@@ -326,7 +327,7 @@ function makeGhost(haunt, { boss = false, hpMul = 1, speedMul = 1 } = {}) {
   };
   body.userData = { ghost, part: 'body' };
   head.userData = { ghost, part: 'head' };
-  const tag = textSprite(null, { width: 512, height: 128, scale: boss ? 2.4 : 1.7 });
+  const tag = textSprite(null, { width: 512, height: 128, scale: boss ? 3.4 : 2.6 });
   tag.position.y = 1.55;
   group.add(tag);
   ghost.tag = tag;
@@ -366,7 +367,7 @@ function startGame() {
   camera.rotation.set(0, 0, 0);
   Object.assign(weapon, { mag: weapon.size, reloadT: 0, fireCd: 0, recoil: 0, shooting: false });
   game.stats = { shots: 0, hits: 0, heads: 0, kills: 0, start: performance.now() };
-  game.wave = 0; game.queue = []; game.betweenT = 1.5; game.running = true; game.paused = false;
+  game.wave = 0; game.queue = []; game.betweenT = 1.5; game.running = true; game.paused = false; game.time = 0;
   $('room-tag').textContent = level.room_name.toUpperCase();
   show('hud');
   updateHud();
@@ -405,7 +406,7 @@ function feed(name, head) {
 function endGame(won) {
   game.running = false;
   controls.unlock();
-  const s = game.stats, secs = Math.round((performance.now() - s.start) / 1000);
+  const s = game.stats, secs = Math.round(game.time);
   $('end-kicker').textContent = won ? 'VICTORY' : 'DEFEAT';
   $('end-title').textContent = won ? `${level.room_name} is cleansed` : 'The haunt claimed you';
   $('end-stats').innerHTML = [
@@ -803,4 +804,7 @@ if (!levelFromHash()) {
 }
 
 // handy for testing in the browser console
-window.phantom = { game, player, camera, weapon, get ghosts() { return ghosts; }, nextWave, startGame, cleanLevel };
+function step(dt) { // one logic tick without drawing (used by automated tests)
+  game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt);
+}
+window.phantom = { game, player, camera, weapon, get ghosts() { return ghosts; }, nextWave, startGame, cleanLevel, step };

@@ -4,6 +4,8 @@
 
 Built at Hacktoberfest Southampton 2026 for the theme **Fusion**: the real world fused with an AI-generated game world.
 
+![Gameplay: ghosts bursting out of a dorm room rebuilt by Gemma 4](screenshot.png)
+
 - Runs **fully offline** once downloaded. Gemma 4 runs locally in Ollama, nothing leaves your machine.
 - Open source (Apache-2.0), built on the open-weight **Gemma 4** model.
 
