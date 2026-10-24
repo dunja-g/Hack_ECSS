@@ -14,10 +14,28 @@
 
   <!-- ===== MENU ===== -->
   <section id="menu" class="overlay">
+    <!-- Halloween night: moon, bats, cobwebs, a floating ghost, pumpkins and fog (decoration only) -->
+    <aside class="spooky" aria-hidden="true">
+      <div class="moon"></div>
+      <svg class="bat b1" viewBox="0 0 64 32"><path d="M32 10c2-4 5-6 8-4-1 2 0 4 2 4 4-6 12-8 22-2-6 1-9 5-9 10-3-3-7-3-9 0-2-2-4-2-6 1-2-3-5-4-8-4s-6 1-8 4c-2-3-4-3-6-1-2-3-6-3-9 0 0-5-3-9-9-10 10-6 18-4 22 2 2 0 3-2 2-4 3-2 6 0 8 4z"/></svg>
+      <svg class="bat b2" viewBox="0 0 64 32"><path d="M32 10c2-4 5-6 8-4-1 2 0 4 2 4 4-6 12-8 22-2-6 1-9 5-9 10-3-3-7-3-9 0-2-2-4-2-6 1-2-3-5-4-8-4s-6 1-8 4c-2-3-4-3-6-1-2-3-6-3-9 0 0-5-3-9-9-10 10-6 18-4 22 2 2 0 3-2 2-4 3-2 6 0 8 4z"/></svg>
+      <svg class="bat b3" viewBox="0 0 64 32"><path d="M32 10c2-4 5-6 8-4-1 2 0 4 2 4 4-6 12-8 22-2-6 1-9 5-9 10-3-3-7-3-9 0-2-2-4-2-6 1-2-3-5-4-8-4s-6 1-8 4c-2-3-4-3-6-1-2-3-6-3-9 0 0-5-3-9-9-10 10-6 18-4 22 2 2 0 3-2 2-4 3-2 6 0 8 4z"/></svg>
+      <svg class="web web-l" viewBox="0 0 160 160"><g fill="none" stroke="currentColor" stroke-width="1.2"><path d="M0 0L160 160M0 0L80 160M0 0L160 80M0 0L0 160M0 0L160 0"/><path d="M0 36Q18 30 36 0M0 70Q38 58 70 0M0 104Q58 86 104 0M0 140Q80 116 140 0"/></g></svg>
+      <svg class="web web-r" viewBox="0 0 160 160"><g fill="none" stroke="currentColor" stroke-width="1.2"><path d="M0 0L160 160M0 0L80 160M0 0L160 80M0 0L0 160M0 0L160 0"/><path d="M0 36Q18 30 36 0M0 70Q38 58 70 0M0 104Q58 86 104 0M0 140Q80 116 140 0"/></g></svg>
+      <svg class="ghost-float" viewBox="0 0 120 150">
+        <path class="sheet" d="M60 6C34 6 22 28 22 56v58c0 6 4 10 8 7l8-8 9 10 9-10 9 10 9-10 9 10 9-10 8 8c4 3 8-1 8-7V56C98 28 86 6 60 6z"/>
+        <ellipse cx="48" cy="50" rx="4" ry="6"/><ellipse cx="72" cy="50" rx="4" ry="6"/>
+        <g class="sign" transform="rotate(-14 92 70)"><rect x="70" y="58" width="44" height="28" fill="#fff" stroke="#111" stroke-width="3"/><text x="92" y="78" text-anchor="middle">BOO!</text><line x1="86" y1="86" x2="80" y2="112" stroke="#ddd" stroke-width="3"/></g>
+      </svg>
+      <svg class="pumpkin p1" viewBox="0 0 100 90"><path class="stem" d="M47 6c4-6 12-6 12-2-6 2-7 8-7 12h-6c0-4 0-7 1-10z"/><ellipse class="body" cx="50" cy="52" rx="44" ry="34"/><path class="rib" d="M50 18c-10 0-16 16-16 34s6 34 16 34M50 18c10 0 16 16 16 34s-6 34-16 34"/><path class="face" d="M28 44l10-8 6 10zM72 44l-10-8-6 10zM26 60c8 10 16 12 24 12s16-2 24-12c-4 2-8 3-12 3l-3 5-4-5h-10l-4 5-3-5c-4 0-8-1-12-3z"/></svg>
+      <svg class="pumpkin p2" viewBox="0 0 100 90"><path class="stem" d="M47 6c4-6 12-6 12-2-6 2-7 8-7 12h-6c0-4 0-7 1-10z"/><ellipse class="body" cx="50" cy="52" rx="44" ry="34"/><path class="rib" d="M50 18c-10 0-16 16-16 34s6 34 16 34M50 18c10 0 16 16 16 34s-6 34-16 34"/><path class="face" d="M30 46l8-10 8 10zM70 46l-8-10-8 10zM30 62h40l-6 8-6-5-8 6-8-6-6 5z"/></svg>
+      <div class="fog f1"></div><div class="fog f2"></div>
+    </aside>
     <div class="menu-inner">
       <header class="brand">
         <h1>PHANTOM<span>FUSION</span></h1>
         <p class="tag">Your room. Their haunt. Powered by Gemma 4.</p>
+        <p class="halloween-tag">&#127875; Happy Halloween &middot; Hacktoberfest 2026 &#127875;</p>
         <p id="gemma-status" class="status"><i></i><span>Checking Gemma...</span></p>
       </header>
 
@@ -45,9 +63,11 @@
           <button class="btn" data-sample="samples/dorm.json">Student dorm</button>
           <button class="btn" data-sample="samples/ecs-lab.json">B60 lab</button>
 
-          <h2 class="gap">03 &nbsp;Paste from Open WebUI</h2>
-          <textarea id="paste" placeholder="Paste Gemma's JSON reply here"></textarea>
-          <button id="load-paste" class="btn">LOAD JSON</button>
+          <h2 class="gap">03 &nbsp;Describe a room</h2>
+          <p class="hint">Type what you want, e.g. "a dorm with two beds and three chairs". Or paste level JSON from Open WebUI.</p>
+          <textarea id="paste" placeholder="A room with two beds and three chairs..."></textarea>
+          <button id="load-paste" class="btn">BUILD IT</button>
+          <p id="paste-msg" class="msg"></p>
         </div>
       </div>
     </div>

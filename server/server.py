@@ -243,8 +243,13 @@ def ollama_request(path, payload=None, timeout=10):
         return json.loads(resp.read().decode())
 
 
-def ask_gemma(image_b64, hint="", plan=False):
+def ask_gemma(image_b64, hint="", plan=False, text=""):
     user_text = "Read this floor plan for a PHANTOM FUSION arena." if plan else "Fuse this photo into a PHANTOM FUSION arena."
+    if text:  # no photo: design the room from the player's own words
+        user_text = ("There is no photo. Design the room the player describes, as if you had seen it, "
+                     "using real furniture sizes. When the player gives a number, that is the TOTAL for the whole room: "
+                     "count walls and groups together and never list the same furniture in both. "
+                     f"The player's description: {text[:600]}")
     if hint:
         user_text += f" Player's wish for the arena: {hint[:200]}"
     payload = {
@@ -255,7 +260,7 @@ def ask_gemma(image_b64, hint="", plan=False):
         "options": {"temperature": 0.5, "num_ctx": 8192},
         "messages": [
             {"role": "system", "content": PLAN_PROMPT if plan else SYSTEM_PROMPT},
-            {"role": "user", "content": user_text, "images": [image_b64]},
+            {"role": "user", "content": user_text, **({"images": [image_b64]} if image_b64 else {})},
         ],
     }
     try:
@@ -315,15 +320,16 @@ class Handler(SimpleHTTPRequestHandler):
             if "," in image[:100]:  # strip "data:image/jpeg;base64,"
                 image = image.split(",", 1)[1]
             base64.b64decode(image[:1000] + "=" * (-len(image[:1000]) % 4))  # sanity check
-            if not image:
-                return self._json(400, {"error": "no image sent"})
+            text = str(body.get("text", "")).strip()
+            if not image and not text:
+                return self._json(400, {"error": "no image or description sent"})
         except Exception as err:  # noqa: BLE001
             return self._json(400, {"error": f"bad request: {err}"})
 
         started = time.time()
         try:
             plan = body.get("mode") == "plan"
-            raw = ask_gemma(image, str(body.get("hint", "")), plan)
+            raw = ask_gemma(image, str(body.get("hint", "")), plan and not text, text)
         except Exception as err:  # noqa: BLE001
             return self._json(502, {"error": f"could not reach Gemma at {OLLAMA_URL}: {err}"})
         try:

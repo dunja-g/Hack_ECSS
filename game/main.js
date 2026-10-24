@@ -1215,9 +1215,77 @@ document.querySelectorAll('[data-sample]').forEach((b) => b.addEventListener('cl
   catch (e) { setMsg('Could not load sample: ' + e.message, 'err'); }
 }));
 
-$('load-paste').addEventListener('click', () => {
-  try { openBriefing(parseLevelText($('paste').value)); }
-  catch (e) { setMsg('That JSON did not work: ' + e.message, 'err'); }
+// "two beds and three chairs" / 兩張床三把椅子 -> { bed: 2, chair: 3 }. Gemma sometimes lists an item twice
+// (on a wall and in a group), so the numbers the player typed are enforced after the layout is built.
+const NUMBER_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  一: 1, 兩: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+const CHINESE_FURNITURE = { 床: 'bed', 椅: 'chair', 書桌: 'desk', 桌: 'table', 書櫃: 'shelf', 書架: 'shelf', 櫃: 'cabinet', 沙發: 'sofa',
+  植物: 'plant', 盆栽: 'plant', 燈: 'lamp', 電腦: 'monitor', 螢幕: 'monitor', 筆電: 'laptop', 電視: 'tv', 白板: 'whiteboard', 窗: 'window', 門: 'door' };
+function requestedCounts(text) {
+  const want = {};
+  // a number, then the first furniture word in the next few words ("three wooden chairs", "one desk lamp")
+  for (const m of text.toLowerCase().matchAll(/\b(\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?=((?:[a-z-]+\s+){0,2}[a-z]+))/g)) {
+    const words = m[2].split(/\s+/);
+    for (let i = 0; i < words.length; i++) {
+      const type = inferType(`${words[i]} ${words[i + 1] || ''}`);
+      if (type === 'box' && !/^box/.test(words[i])) continue;
+      want[type] = (want[type] || 0) + (Number(m[1]) || NUMBER_WORDS[m[1]]);
+      break;
+    }
+  }
+  for (const m of text.matchAll(/(\d+|[一兩二三四五六七八九十])\s*[張把個台座盞扇株]?\s*([\u4e00-\u9fff]{1,2})/g)) {
+    const key = Object.keys(CHINESE_FURNITURE).find((k) => m[2].startsWith(k) || m[2].includes(k));
+    if (key) want[CHINESE_FURNITURE[key]] = (want[CHINESE_FURNITURE[key]] || 0) + (Number(m[1]) || NUMBER_WORDS[m[1]]);
+  }
+  return want;
+}
+function enforceCounts(level, want) {
+  // the player listed what they want: keep only that, plus the room's doors and windows
+  if (Object.keys(want).length) level.objects = level.objects.filter((o) => o.type in want || o.type === 'door' || o.type === 'window');
+  for (const [type, n] of Object.entries(want)) {
+    const of = level.objects.filter((o) => o.type === type);
+    // keep haunted ones first, then the rest in order, and drop the extras
+    const keep = new Set([...of.filter((o) => o.haunted), ...of.filter((o) => !o.haunted)].slice(0, n));
+    level.objects = level.objects.filter((o) => o.type !== type || keep.has(o));
+  }
+  for (const o of level.objects) { // at least two ghosts must still have somewhere to hide
+    if (level.objects.filter((x) => x.haunted).length >= 2) break;
+    if (!o.haunted && o.type !== 'window' && o.type !== 'door') {
+      o.haunted = true; o.ghost = { name: 'Hollowmi', personality: `the restless spirit of the ${o.name}`, hp: 100, speed: 2.5 };
+    }
+  }
+  return level;
+}
+
+// Box 03: paste level JSON, or just describe a room in words and let Gemma design it.
+function setPasteMsg(text, cls = '') { const m = $('paste-msg'); m.textContent = text; m.className = 'msg ' + cls; }
+$('load-paste').addEventListener('click', async () => {
+  const text = $('paste').value.trim();
+  if (!text) return setPasteMsg('Describe a room, or paste level JSON.', 'err');
+  if (text.includes('{')) {
+    try { openBriefing(parseLevelText(text)); setPasteMsg(''); }
+    catch (e) { setPasteMsg('That JSON did not work: ' + e.message, 'err'); }
+    return;
+  }
+  audio();
+  $('load-paste').disabled = true;
+  const t0 = performance.now();
+  const timer = setInterval(() => setPasteMsg(`Gemma is designing your room... ${Math.round((performance.now() - t0) / 1000)}s`, 'busy'), 500);
+  try {
+    const res = await fetch('api/analyze', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, hint: $('hint').value }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gemma failed');
+    setPasteMsg(`Designed in ${data.seconds}s with ${data.model}`);
+    openBriefing(enforceCounts(cleanLevel(data.level), requestedCounts(text)));
+  } catch (e) {
+    setPasteMsg(`${e.message}. You can still play a sample.`, 'err');
+  } finally {
+    clearInterval(timer);
+    $('load-paste').disabled = false;
+  }
 });
 
 $('enter').addEventListener('click', () => { audio(); startGame(); });
@@ -1251,4 +1319,4 @@ if (!levelFromHash()) {
 function step(dt) { // one logic tick without drawing (used by automated tests)
   game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt); updateFx(dt); updateOrbs(dt); worldUpdate(dt, game.time); drawRadar();
 }
-window.phantom = { game, player, camera, weapon, burst, STYLE, perf, renderer, get ghosts() { return ghosts; }, get solids() { return solids; }, nextWave, startGame, cleanLevel, step };
+window.phantom = { game, player, camera, weapon, burst, STYLE, perf, renderer, get ghosts() { return ghosts; }, get solids() { return solids; }, nextWave, startGame, cleanLevel, step, requestedCounts };
