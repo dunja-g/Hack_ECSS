@@ -114,6 +114,7 @@ const sfx = {
   head: () => blip({ freq: 1800, to: 2400, dur: 0.12, type: 'triangle', vol: 0.18 }),
   kill: () => blip({ freq: 700, to: 90, dur: 0.45, type: 'sawtooth', vol: 0.12 }),
   hurt: () => blip({ freq: 120, to: 60, dur: 0.2, type: 'square', vol: 0.2 }),
+  enemyShot: () => blip({ noise: true, freq: 800, dur: 0.07, vol: 0.16 }),
   reload: () => blip({ freq: 300, to: 600, dur: 0.15, type: 'triangle', vol: 0.1 }),
   dash: () => blip({ noise: true, freq: 500, dur: 0.2, vol: 0.2 }),
   spawn: () => blip({ freq: 220, to: 880, dur: 0.5, type: 'sine', vol: 0.12 }),
@@ -382,12 +383,14 @@ function makeSoldier(haunt, { boss = false, hpMul = 1, speedMul = 1 } = {}) {
     B(0.14, 0.56, 0.16, uni, 0, -0.26, 0, sh); if (s < 0) B(0.15, 0.08, 0.17, band, 0, -0.08, 0, sh);
   }
   B(0.06, 0.09, 0.72, dark, 0.06, 1.34, 0.42);  // rifle
+  const muzzle = new THREE.Object3D(); muzzle.position.set(0.06, 1.34, 0.8); group.add(muzzle);
   const head = B(0.26, 0.28, 0.26, S('#1b1e24'), 0, 1.7, 0);
   B(0.31, 0.12, 0.31, S('#20242b'), 0, 1.85, -0.01); // helmet
   B(0.22, 0.06, 0.03, S('#0a0b0d'), 0, 1.73, 0.135); // goggles
   const maxHp = g.hp * hpMul * (boss ? 3 : 1);
   const ghost = { group, body: torso, head, flashMat: uni, legs, soldier: true, name: boss ? `${g.name} (BOSS)` : g.name, hp: maxHp, maxHp,
-    speed: g.speed * speedMul * (boss ? 0.8 : 1), boss, state: 'emerging', t: 0, attackCd: 0, scale: boss ? 1.15 : 1, from: haunt, phase: Math.random() * 6.28 };
+    speed: g.speed * speedMul * (boss ? 0.8 : 1), boss, state: 'emerging', t: 0, attackCd: 0, scale: boss ? 1.15 : 1, from: haunt, phase: Math.random() * 6.28,
+    muzzle, sees: false, losT: 0, aimT: 0, shotCd: 1 + Math.random(), burstLeft: 0 };
   for (const p of parts) { p.userData = { ghost, part: p === head || p.position.y > 1.6 ? 'head' : 'body' }; }
   const tag = textSprite(null, { width: 512, height: 128, scale: 1.4 }); tag.position.y = 2.2; group.add(tag); ghost.tag = tag; drawTag(ghost);
   const hp = haunt.mesh.position, dir = new THREE.Vector3(player.pos.x - hp.x, 0, player.pos.z - hp.z).normalize();
@@ -621,10 +624,11 @@ const tracerMat = new THREE.MeshBasicMaterial({ color: glow(ST.tracer, LOWFX ? 1
 const burstGeo = ST.petals ? new THREE.PlaneGeometry(0.14, 0.09) : new THREE.OctahedronGeometry(0.07);
 const burstMat = new THREE.MeshBasicMaterial({ color: glow(ST.burst, LOWFX ? 1 : 2.5), side: THREE.DoubleSide, transparent: true });
 
-function tracer(to) {
-  const from = flash.getWorldPosition(new THREE.Vector3());
+const enemyTracerMat = new THREE.MeshBasicMaterial({ color: glow('#ff5a3c', LOWFX ? 1 : 3), transparent: true });
+
+function tracer(to, from = flash.getWorldPosition(new THREE.Vector3()), mat = tracerMat) {
   const len = from.distanceTo(to);
-  const m = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, len), tracerMat.clone());
+  const m = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, len), mat.clone());
   m.position.copy(from).lerp(to, 0.5); m.lookAt(to); m.raycast = () => {};
   world.add(m); fx.push({ m, life: 0.07, max: 0.07, dispose: true });
 }
@@ -751,15 +755,25 @@ function updateSoldier(gh, dt) {
   } else if (gh.state === 'chase') {
     const to = new THREE.Vector3(player.pos.x - g.position.x, 0, player.pos.z - g.position.z);
     const dist = to.length(); to.normalize();
-    const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(Math.sin(gh.t * 1.3 + gh.phase) * 0.7);
+    // line of sight from the rifle to the player's chest, rechecked a few times a second
+    gh.losT -= dt;
+    if (gh.losT <= 0) {
+      gh.losT = 0.15;
+      gh.sees = dist < SOLDIER_RANGE && canSee(gh.muzzle.getWorldPosition(_muzzle), chest());
+    }
+    // with a clear shot, hold position and strafe; otherwise keep closing in
+    const holding = gh.sees && dist > 3 && dist < 14;
+    const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(Math.sin(gh.t * 1.3 + gh.phase) * (holding ? 1 : 0.7));
     if (dist > 1.1) {
-      g.position.addScaledVector(to.add(side).normalize(), gh.speed * 0.8 * dt);
+      const move = holding ? side.normalize().multiplyScalar(0.35) : to.add(side).normalize();
+      g.position.addScaledVector(move, gh.speed * 0.8 * dt);
       collide(g.position, 0);
-      gh.legs[0].rotation.x = Math.sin(gh.t * 9) * 0.55; gh.legs[1].rotation.x = -gh.legs[0].rotation.x;
+      gh.legs[0].rotation.x = Math.sin(gh.t * 9) * 0.55 * (holding ? 0.4 : 1); gh.legs[1].rotation.x = -gh.legs[0].rotation.x;
     }
     g.rotation.y = Math.atan2(player.pos.x - g.position.x, player.pos.z - g.position.z);
     gh.attackCd -= dt;
     if (dist < 1.5 && gh.attackCd <= 0) { gh.attackCd = 0.9; hurt(gh.boss ? 20 : 12); }
+    else if (dist >= 1.5) soldierShoot(gh, dist, dt);
   } else if (gh.state === 'dead') {
     g.rotation.x = -Math.min(1, gh.t / 0.35) * Math.PI / 2;
     if (gh.t > 1.6) g.position.y -= dt * 0.6;
@@ -767,7 +781,43 @@ function updateSoldier(gh, dt) {
   }
 }
 
+// soldiers aim for a moment once they see you, then fire short bursts
+const SOLDIER_RANGE = 22;
+const losRay = new THREE.Raycaster();
+const _muzzle = new THREE.Vector3(), _chest = new THREE.Vector3(), _losDir = new THREE.Vector3();
+function chest() { return _chest.set(player.pos.x, player.pos.y + 1.2, player.pos.z); }
+function canSee(from, to) {
+  const d = _losDir.subVectors(to, from).length();
+  losRay.set(from, _losDir.divideScalar(d)); losRay.far = d - 0.3;
+  return losRay.intersectObjects(solids.map((s) => s.mesh), false).length === 0;
+}
+
+function soldierShoot(gh, dist, dt) {
+  gh.shotCd -= dt;
+  if (!gh.sees) { gh.aimT = 0; gh.burstLeft = 0; return; }
+  gh.aimT += dt;
+  if (gh.aimT < 0.5 || gh.shotCd > 0) return;
+  if (gh.burstLeft <= 0) gh.burstLeft = 3;
+  gh.burstLeft--;
+  gh.shotCd = gh.burstLeft > 0 ? 0.12 : (gh.boss ? 1.0 : 1.6 + Math.random() * 0.8);
+
+  // harder to hit at range, while moving, and much harder mid-dash
+  let chance = 0.6 - dist * 0.02;
+  if (player.dashT > 0) chance *= 0.3;
+  else if (moveDir().lengthSq() > 0 || !player.onGround) chance *= 0.55;
+  const from = gh.muzzle.getWorldPosition(new THREE.Vector3()), target = chest().clone();
+  sfx.enemyShot();
+  if (Math.random() < clamp(chance, 0.08, 0.6)) {
+    tracer(target, from, enemyTracerMat);
+    hurt(gh.boss ? 8 : 5);
+  } else {
+    const miss = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.3, Math.random() - 0.5).normalize().multiplyScalar(0.7 + Math.random() * 0.6);
+    tracer(target.add(miss).sub(from).setLength(dist + 6).add(from), from, enemyTracerMat);
+  }
+}
+
 function hurt(dmg) {
+  if (player.hp <= 0) return;
   player.hp = Math.max(0, player.hp - dmg);
   sfx.hurt();
   const v = $('vignette'); v.classList.add('hurt'); setTimeout(() => v.classList.remove('hurt'), 120);
@@ -984,4 +1034,4 @@ if (!levelFromHash()) {
 function step(dt) { // one logic tick without drawing (used by automated tests)
   game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt); updateFx(dt); worldUpdate(dt, game.time);
 }
-window.phantom = { game, player, camera, weapon, burst, STYLE, get ghosts() { return ghosts; }, nextWave, startGame, cleanLevel, step };
+window.phantom = { game, player, camera, weapon, burst, STYLE, get ghosts() { return ghosts; }, get solids() { return solids; }, nextWave, startGame, cleanLevel, step };
