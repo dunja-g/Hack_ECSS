@@ -1233,22 +1233,61 @@ function requestedCounts(text) {
       break;
     }
   }
-  for (const m of text.matchAll(/(\d+|[一兩二三四五六七八九十])\s*[張把個台座盞扇株]?\s*([\u4e00-\u9fff]{1,2})/g)) {
+  for (const m of text.matchAll(/(\d+|[一兩二三四五六七八九十])\s*[張把個台座盞扇株盆隻件套組排間顆棵]?\s*([\u4e00-\u9fff]{1,2})/g)) {
     const key = Object.keys(CHINESE_FURNITURE).find((k) => m[2].startsWith(k) || m[2].includes(k));
     if (key) want[CHINESE_FURNITURE[key]] = (want[CHINESE_FURNITURE[key]] || 0) + (Number(m[1]) || NUMBER_WORDS[m[1]]);
   }
   return want;
 }
+// Furniture that answers the same request: "桌子" may come back from Gemma as a desk or a table.
+const SAME_AS = { table: ['table', 'desk'], desk: ['desk', 'table'], shelf: ['shelf', 'cabinet'], cabinet: ['cabinet', 'shelf'] };
 function enforceCounts(level, want) {
-  // the player listed what they want: keep only that, plus the room's doors and windows
-  if (Object.keys(want).length) level.objects = level.objects.filter((o) => o.type in want || o.type === 'door' || o.type === 'window');
+  if (!Object.keys(want).length) return level;
+  const W = level.size.width, D = level.size.depth;
+  const family = (type) => SAME_AS[type] || [type];
+  // 1. keep only what the player listed (plus doors and windows), at most the number they asked for
+  const kept = [];
   for (const [type, n] of Object.entries(want)) {
-    const of = level.objects.filter((o) => o.type === type);
-    // keep haunted ones first, then the rest in order, and drop the extras
-    const keep = new Set([...of.filter((o) => o.haunted), ...of.filter((o) => !o.haunted)].slice(0, n));
-    level.objects = level.objects.filter((o) => o.type !== type || keep.has(o));
+    const pool = level.objects.filter((o) => family(type).includes(o.type) && !kept.includes(o));
+    kept.push(...[...pool.filter((o) => o.haunted), ...pool.filter((o) => !o.haunted)].slice(0, n));
   }
-  for (const o of level.objects) { // at least two ghosts must still have somewhere to hide
+  level.objects = level.objects.filter((o) => kept.includes(o) || o.type === 'door' || o.type === 'window');
+
+  // 2. top up anything Gemma left out: chairs go round the tables first, the rest on free floor
+  const spot = (o) => o.at || [(o.pos[0] - 0.5) * (W - 1.5), (o.pos[1] - 0.5) * (D - 1.5)];
+  const clear = (x, z, w, d) => {
+    if (Math.abs(x) > W / 2 - 1 - w / 2 || z < -D / 2 + 1 + d / 2 || z > D / 2 - 3) return false; // off walls, and not on the player's spawn
+    return !level.objects.some((o) => {
+      if (o.wall) return false;
+      const [ox, oz] = spot(o), r = o.rotation === 90 || o.rotation === 270;
+      const ow = r ? o.size[2] : o.size[0], od = r ? o.size[0] : o.size[2];
+      return Math.abs(ox - x) < (ow + w) / 2 + 0.25 && Math.abs(oz - z) < (od + d) / 2 + 0.25;
+    });
+  };
+  for (const [type, n] of Object.entries(want)) {
+    let have = level.objects.filter((o) => family(type).includes(o.type)).length;
+    if (have >= n || !SIZES[type]) continue;
+    const [w, h, d] = SIZES[type];
+    const add = (x, z, rot) => {
+      level.objects.push({ name: type, type, shape: 'box', at: [x, z], size: [w, h, d], rotation: rot, elevation: 0, color: COLOURS[type], haunted: false, wall: null });
+      have++;
+    };
+    if (type === 'chair') {
+      for (const t of level.objects.filter((o) => o.type === 'table' || o.type === 'desk')) {
+        const [tx, tz] = spot(t);
+        for (const [dx, dz, rot] of [[0, t.size[2] / 2 + 0.4, 180], [0, -t.size[2] / 2 - 0.4, 0], [t.size[0] / 2 + 0.4, 0, 270], [-t.size[0] / 2 - 0.4, 0, 90]]) {
+          if (have >= n) break;
+          if (clear(tx + dx, tz + dz, w, d)) add(tx + dx, tz + dz, rot);
+        }
+      }
+    }
+    for (let z = -D / 2 + 1.5; z < D / 2 - 3 && have < n; z += 0.6) {
+      for (let x = -W / 2 + 1.5; x < W / 2 - 1.5 && have < n; x += 0.6) if (clear(x, z, w, d)) add(x, z, 0);
+    }
+  }
+
+  // 3. at least two ghosts must still have somewhere to hide
+  for (const o of level.objects) {
     if (level.objects.filter((x) => x.haunted).length >= 2) break;
     if (!o.haunted && o.type !== 'window' && o.type !== 'door') {
       o.haunted = true; o.ghost = { name: 'Hollowmi', personality: `the restless spirit of the ${o.name}`, hp: 100, speed: 2.5 };
