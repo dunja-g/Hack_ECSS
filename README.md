@@ -70,6 +70,7 @@ python3 server/server.py        # Python 3.10+, no packages needed
 | WASD | Move |
 | Mouse | Aim |
 | Left click (hold) | Shoot |
+| Right click (hold) | Aim down sights: zoom in, tighter spread, slower movement |
 | R | Reload |
 | Shift | Dash (3 s cooldown) |
 | Space | Jump (you can stand on furniture) |

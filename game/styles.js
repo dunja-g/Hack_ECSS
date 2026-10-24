@@ -5,7 +5,7 @@ export const STYLES = {
   // D. Tactical: realistic-looking indoor room, human enemies, CS-style HUD (default)
   tactical: {
     label: 'Tactical',
-    realistic: true, enemy: 'soldier', ceiling: true,
+    realistic: true, ceiling: true,
     sky: ['#9aa6ae', '#d9dee2'], hemi: ['#ffffff', '#6e665c', 0.45], sun: ['#fff8ee', 1.1],
     fog: '#c4c9cd', fogNear: 22, fogFar: 3.5,
     outline: null, outlineMul: 0,

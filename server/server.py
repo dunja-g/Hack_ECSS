@@ -34,6 +34,9 @@ SYSTEM_PROMPT = (HERE / "prompt.txt").read_text(encoding="utf-8")
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 SHAPES = {"box", "cylinder", "sphere"}
 LIGHTING = {"day", "dusk", "night", "neon"}
+TYPES = {"desk", "table", "chair", "sofa", "bed", "shelf", "cabinet", "monitor", "laptop", "tv",
+         "lamp", "plant", "whiteboard", "door", "window", "box"}
+WALLS = {"back", "front", "left", "right"}
 GHOST_NAMES = ["Kurayami", "Hollowmi", "Shirei", "Bakeneko-chan", "Yurei-X", "Onibi"]
 
 
@@ -46,14 +49,68 @@ def _num(value, default, lo, hi):
     return max(lo, min(hi, v))
 
 
+def _opt(value, lo, hi):
+    """Like _num, but missing or junk values stay None so the game can pick a sensible default."""
+    try:
+        return max(lo, min(hi, float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def _hex(value, default):
     return value if isinstance(value, str) and HEX.match(value) else default
+
+
+def clean_scene(data):
+    """Gemma's room description (walls + groups). Keep it tidy; the game's layout engine builds the furniture."""
+    text = lambda v, n: str(v)[:n] if v is not None else None
+    size = data.get("size_guess") or {}
+    palette = data.get("palette") or {}
+    walls = data.get("walls") if isinstance(data.get("walls"), dict) else {}
+    groups = []
+    for g in (data.get("groups") or [])[:12]:
+        if not isinstance(g, dict):
+            continue
+        clean = {k: text(g.get(k), 40) for k in ("type", "name", "layout", "where", "on", "with") if g.get(k) is not None}
+        clean["count"] = int(_num(g.get("count"), 1, 1, 24))
+        if g.get("rows") is not None:
+            clean["rows"] = int(_num(g.get("rows"), 1, 1, 8))
+        clean["color"] = _hex(g.get("color"), None)
+        clean["divider"] = bool(g.get("divider"))
+        groups.append(clean)
+    haunted = []
+    for h in (data.get("haunted") or [])[:5]:
+        if isinstance(h, dict):
+            gh = h.get("ghost") if isinstance(h.get("ghost"), dict) else {}
+            haunted.append({"object": text(h.get("object"), 40), "ghost": {
+                "name": text(gh.get("name"), 30), "personality": text(gh.get("personality"), 100),
+                "hp": _num(gh.get("hp"), 100, 60, 200), "speed": _num(gh.get("speed"), 2.5, 1, 4)}})
+    scene = {
+        "room_name": text(data.get("room_name") or "Unnamed Haunt", 60),
+        "vibe": text(data.get("vibe") or "Something stirs in the shadows.", 200),
+        "boss_line": text(data.get("boss_line") or "You should not have opened this door...", 140),
+        "room_type": text(data.get("room_type"), 20),
+        "shape": data.get("shape") if data.get("shape") in ("long", "wide", "square") else "square",
+        "size_guess": {"width": _opt(size.get("width"), 6, 30), "depth": _opt(size.get("depth"), 6, 30),
+                       "height": _opt(size.get("height"), 2.4, 8)},
+        "palette": {k: _hex(palette.get(k), d) for k, d in
+                    (("floor", "#3b3355"), ("walls", "#5a4b8a"), ("accent", "#ff4d8d"), ("fog", "#1a1430"))},
+        "lighting": data.get("lighting") if data.get("lighting") in LIGHTING else "day",
+        "walls": {side: [text(e, 30) for e in (walls.get(side) or [])[:8] if e] for side in WALLS},
+        "groups": groups,
+        "haunted": haunted,
+    }
+    if not groups and not any(scene["walls"].values()):
+        raise ValueError("model described an empty room")
+    return scene
 
 
 def clean_level(data):
     """Make any model reply safe for the game: clamp numbers, fill gaps."""
     if not isinstance(data, dict):
         raise ValueError("model reply is not a JSON object")
+    if isinstance(data.get("groups"), list) or isinstance(data.get("walls"), dict):
+        return clean_scene(data)
 
     size = data.get("size") or {}
     palette = data.get("palette") or {}
@@ -76,7 +133,7 @@ def clean_level(data):
         "objects": [],
     }
 
-    for obj in (data.get("objects") or [])[:12]:
+    for obj in (data.get("objects") or [])[:20]:
         if not isinstance(obj, dict):
             continue
         pos = obj.get("pos") or [0.5, 0.5]
@@ -93,10 +150,14 @@ def clean_level(data):
             "name": str(obj.get("name") or "thing")[:40],
             "shape": obj.get("shape") if obj.get("shape") in SHAPES else "box",
             "pos": [round(x, 3), round(z, 3)],
-            "size": [_num(sz[0], 1, 0.2, 4), _num(sz[1], 1, 0.2, 4), _num(sz[2], 1, 0.2, 4)],
+            "size": [_num(sz[0], 1, 0.03, 6), _num(sz[1], 1, 0.03, 4), _num(sz[2], 1, 0.03, 6)],
             "color": _hex(obj.get("color"), "#8a7bd8"),
             "elevation": _num(obj.get("elevation"), 0, 0, 2.5),
             "haunted": bool(obj.get("haunted")),
+            # the game builds a model per type and guesses one from the name when it is missing
+            "type": obj.get("type") if obj.get("type") in TYPES else None,
+            "rotation": _num(obj.get("rotation"), 0, -360, 360),
+            "wall": obj.get("wall") if obj.get("wall") in WALLS else None,
         }
         if clean["haunted"]:
             g = obj.get("ghost") or {}

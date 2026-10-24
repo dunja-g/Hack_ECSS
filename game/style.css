@@ -166,3 +166,18 @@ body.scanlines #hud::after { content: ""; position: absolute; inset: 0; pointer-
 /* tactical: soft lens vignette for depth (drawn by CSS, costs nothing on the GPU) */
 body.style-tactical #hud::before { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(ellipse at center, transparent 55%, #0000004d 100%); }
+
+/* aim down sights */
+#crosshair { transition: opacity .12s; }
+#hud.ads #crosshair { opacity: 0; }
+#scope { position: absolute; inset: 0; opacity: 0; transition: opacity .08s;
+  background: radial-gradient(circle at center, transparent 0 min(38vh, 38vw), #000000e6 calc(min(38vh, 38vw) + 1px), #000 100%); }
+#scope.on { opacity: 1; }
+#scope::before { content: ""; position: absolute; left: 50%; top: 50%; width: min(76vh, 76vw); height: min(76vh, 76vw);
+  transform: translate(-50%, -50%); border-radius: 50%; box-shadow: inset 0 0 40px 10px #000a, 0 0 0 2px #000; }
+#scope i { position: absolute; background: #000; }
+#scope .h { left: calc(50% - min(38vh, 38vw)); width: min(76vh, 76vw); top: 50%; height: 1.5px; margin-top: -.75px;
+  background: linear-gradient(90deg, #000 0 40%, #000a 40% 60%, #000 60%); }
+#scope .v { top: calc(50% - min(38vh, 38vw)); height: min(76vh, 76vw); left: 50%; width: 1.5px; margin-left: -.75px;
+  background: linear-gradient(180deg, #000 0 40%, #000a 40% 60%, #000 60%); }
+#scope::after { content: ""; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: var(--red); box-shadow: 0 0 6px var(--red); }

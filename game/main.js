@@ -9,6 +9,9 @@ import { RenderPass } from './vendor/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from './vendor/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from './vendor/postprocessing/OutputPass.js';
 import { RoomEnvironment } from './vendor/environments/RoomEnvironment.js';
+import { makeBooGhost, makeGhostShadow } from './ghost.js';
+import { buildFurniture, inferType, TYPES, WALL_TYPES } from './furniture.js';
+import { isScene, expandScene } from './layout.js';
 import { STYLES, pickStyle, decorate, glow, floorTexture, wallTexture, grainTexture } from './styles.js';
 
 const STYLE = pickStyle();
@@ -24,8 +27,22 @@ const HEX = /^#[0-9a-fA-F]{6}$/;
 function num(v, d, lo, hi) { const n = Number(v); return clamp(Number.isFinite(n) ? n : d, lo, hi); }
 function hex(v, d) { return typeof v === 'string' && HEX.test(v) ? v : d; }
 
+// Realistic size ranges per furniture type, [min], [max] as [width, height, depth] in metres.
+// Small vision models often get sizes badly wrong (a 0.2 m wide bookcase); this pulls them back.
+const LIMITS = {
+  desk: [[0.8, 0.65, 0.45], [2.4, 0.95, 1.2]], table: [[0.6, 0.4, 0.5], [3.5, 1.1, 2.0]],
+  chair: [[0.4, 0.7, 0.4], [0.8, 1.3, 0.8]], sofa: [[1.2, 0.6, 0.7], [3.2, 1.1, 1.2]],
+  bed: [[1.8, 0.3, 0.9], [2.3, 1.0, 2.2]], shelf: [[0.6, 0.8, 0.25], [2.5, 2.8, 0.6]],
+  cabinet: [[0.4, 0.6, 0.35], [2.5, 2.4, 0.9]], monitor: [[0.35, 0.25, 0.03], [1.0, 0.7, 0.25]],
+  laptop: [[0.28, 0.03, 0.18], [0.45, 0.05, 0.35]], tv: [[0.6, 0.35, 0.03], [2.2, 1.3, 0.3]],
+  lamp: [[0.15, 0.3, 0.15], [0.6, 2.0, 0.6]], plant: [[0.2, 0.25, 0.2], [1.5, 2.5, 1.5]],
+  whiteboard: [[0.8, 0.6, 0.02], [5.0, 1.6, 0.08]], door: [[0.7, 1.9, 0.04], [2.0, 2.6, 0.15]],
+  window: [[0.5, 0.5, 0.03], [3.5, 2.2, 0.15]],
+};
+
 function cleanLevel(data) {
   if (!data || typeof data !== 'object') throw new Error('Level is not a JSON object');
+  if (isScene(data)) data = expandScene(data); // Gemma described the room; build the layout from templates
   const s = data.size || {}, p = data.palette || {};
   const level = {
     room_name: String(data.room_name || 'Unnamed Haunt').slice(0, 60),
@@ -40,7 +57,8 @@ function cleanLevel(data) {
     objects: [],
   };
   const names = ['Kurayami', 'Hollowmi', 'Shirei', 'Yurei-X', 'Onibi', 'Bakeneko-chan'];
-  for (const o of (Array.isArray(data.objects) ? data.objects : []).slice(0, 12)) {
+  const W = level.size.width, D = level.size.depth;
+  for (const o of (Array.isArray(data.objects) ? data.objects : []).slice(0, data.expanded ? 120 : 20)) {
     if (!o || typeof o !== 'object') continue;
     const pos = Array.isArray(o.pos) && o.pos.length >= 2 ? o.pos : [0.5, 0.5];
     const sz = Array.isArray(o.size) && o.size.length >= 3 ? o.size : [1, 1, 1];
@@ -50,11 +68,30 @@ function cleanLevel(data) {
       name: String(o.name || 'thing').slice(0, 40),
       shape: ['box', 'cylinder', 'sphere'].includes(o.shape) ? o.shape : 'box',
       pos: [x, z],
-      size: [num(sz[0], 1, 0.2, 4), num(sz[1], 1, 0.2, 4), num(sz[2], 1, 0.2, 4)],
+      size: [num(sz[0], 1, 0.03, 6), num(sz[1], 1, 0.03, 4), num(sz[2], 1, 0.03, 6)],
       color: hex(o.color, '#8a7bd8'),
       elevation: num(o.elevation, 0, 0, 2.5),
       haunted: !!o.haunted,
     };
+    c.type = TYPES.includes(o.type) ? o.type : inferType(c.name);
+    if (Array.isArray(o.at) && o.at.length >= 2) { // exact spot in metres, from the layout engine
+      c.at = [num(o.at[0], 0, -W / 2 + 0.3, W / 2 - 0.3), num(o.at[1], 0, -D / 2 + 0.3, D / 2 - 0.3)];
+    }
+    if (o.divider) c.divider = true;
+    c.rotation = Math.round(num(o.rotation, 0, -360, 360) / 90) * 90 % 360; // right angles keep collisions exact
+    c.wall = ['back', 'front', 'left', 'right'].includes(o.wall) ? o.wall : null;
+    if (!c.wall && WALL_TYPES.includes(c.type)) { // stick boards, doors and windows to the nearest wall
+      const gaps = { left: x, right: 1 - x, back: z, front: 1 - z };
+      c.wall = Object.keys(gaps).sort((a, b) => gaps[a] - gaps[b])[0];
+    }
+    if (c.type === 'window' && !o.elevation) c.elevation = 0.9;
+    // furniture shows its long side to the room: a deep, narrow shelf is really a wide one turned sideways
+    if (!c.wall && !c.rotation && c.size[2] > c.size[0] * 1.3 && ['shelf', 'cabinet', 'sofa', 'desk', 'bed', 'monitor', 'tv'].includes(c.type)) {
+      c.size = [c.size[2], c.size[1], c.size[0]];
+      c.rotation = x < 0.5 ? 90 : 270;
+    }
+    const lim = LIMITS[c.type];
+    if (lim) c.size = c.size.map((v, i) => clamp(v, lim[0][i], lim[1][i]));
     if (c.haunted) {
       const g = o.ghost || {};
       c.ghost = {
@@ -275,35 +312,51 @@ function buildWorld(lv) {
     if (!ST.realistic) world.add(stripe);
   }
 
-  // objects from the photo
+  // objects from the photo, each built as a proper piece of furniture
+  // materials are shared between pieces: a library has dozens of identical bookcases
+  const mats = new Map();
+  const shared = (key, make) => mats.get(key) || mats.set(key, make()).get(key);
   for (const o of lv.objects) {
     const [w, h, d] = o.size;
-    let geo;
-    if (o.shape === 'cylinder') geo = new THREE.CylinderGeometry(w / 2, w / 2, h, 20);
-    else if (o.shape === 'sphere') geo = new THREE.SphereGeometry(0.5, 20, 14);
-    else geo = new THREE.BoxGeometry(w, h, d);
-    const mat = ST.neon ? toon('#0c0a1c')
-      : ST.realistic ? new THREE.MeshStandardMaterial({ color: o.color, map: grainTexture(), roughness: 0.7, metalness: 0.1 })
-      : toon(o.color, o.haunted ? { emissive: '#9b4dff', emissiveIntensity: 0.25 } : {});
-    const mesh = outline(new THREE.Mesh(geo, mat), o.shape === 'box' ? 0.03 : 0.05);
-    if (ST.neon) neonEdges(mesh, o.haunted ? '#ff2bd6' : o.color, o.haunted ? 2 : 1.4);
-    if (o.shape === 'sphere') mesh.scale.set(w, h, d);
-    const x = (o.pos[0] - 0.5) * (W - 1.5), z = (o.pos[1] - 0.5) * (D - 1.5);
-    mesh.position.set(x, (o.elevation || 0) + h / 2, z);
-    mesh.castShadow = mesh.receiveShadow = true;
-    world.add(mesh);
-    solids.push({ box: new THREE.Box3().setFromObject(mesh), mesh });
+    const kit = {
+      paint: (c, { grain = false, rough = 0.7, metal = 0.1 } = {}) => shared(`p${c}${grain}${rough}${metal}`, () => ST.neon ? toon('#0c0a1c')
+        : ST.realistic ? new THREE.MeshStandardMaterial({ color: c, map: grain ? grainTexture() : null, roughness: rough, metalness: metal })
+        : toon(c)),
+      screen: (c, k = 1.3) => shared(`s${c}${k}`, () => new THREE.MeshBasicMaterial({ color: glow(c, LOWFX ? 1 : k) })),
+      edge: (m) => { if (ST.neon) neonEdges(m, o.haunted ? '#ff2bd6' : o.color, o.haunted ? 2 : 1.4); return outline(m, 0.03); },
+    };
+    const { root, collider } = buildFurniture(o, kit);
+    let [x, z] = o.at || [(o.pos[0] - 0.5) * (W - 1.5), (o.pos[1] - 0.5) * (D - 1.5)];
+    let turn = (o.rotation || 0) * Math.PI / 180;
+    // wall pieces sit flush against their wall and face into the room
+    const inner = 0.2 + d / 2 + 0.01; // walls are 0.4 thick, centred on the room edge
+    if (o.wall === 'back' || o.wall === 'front') {
+      x = clamp(x, -W / 2 + w / 2 + 0.3, W / 2 - w / 2 - 0.3);
+      z = (o.wall === 'back' ? -1 : 1) * (D / 2 - inner);
+      turn = o.wall === 'back' ? 0 : Math.PI;
+    } else if (o.wall === 'left' || o.wall === 'right') {
+      z = clamp(z, -D / 2 + w / 2 + 0.3, D / 2 - w / 2 - 0.3);
+      x = (o.wall === 'left' ? -1 : 1) * (W / 2 - inner);
+      turn = o.wall === 'left' ? Math.PI / 2 : -Math.PI / 2;
+    }
+    root.position.set(x, o.elevation || 0, z);
+    root.rotation.y = turn;
+    world.add(root);
+    root.updateMatrixWorld(true);
+    // windows and doors are part of the wall, so they never block
+    if (o.type !== 'window' && o.type !== 'door') solids.push({ box: new THREE.Box3().setFromObject(collider), mesh: collider });
 
+    const top = (o.elevation || 0) + h;
     const label = textSprite(o.name, { scale: 2.0 });
-    label.position.set(x, h + 0.45, z);
+    label.position.set(x, top + 0.45, z);
     label.material.opacity = o.haunted ? 1 : 0.55;
     if (ST.labels !== false) world.add(label);
 
     if (o.haunted) {
       const light = new THREE.PointLight(ST.realistic ? '#cfe0ff' : '#b06bff', 2.5, 5);
-      light.position.set(x, h + 0.6, z);
+      light.position.set(x, top + 0.6, z);
       world.add(light);
-      haunts.push({ obj: o, mesh, light, base: mesh.position.clone(), shake: 0 });
+      haunts.push({ obj: o, mesh: root, collider, light, base: root.position.clone(), shake: 0 });
     }
   }
   worldUpdate = decorate(STYLE, world, lv);
@@ -360,110 +413,44 @@ flashLight.position.copy(flash.position);
 gun.add(flash, flashLight);
 if (ST.realistic) flash.position.set(0, 0.005, -0.84);
 const GUN_REST = ST.realistic ? new THREE.Vector3(0.2, -0.21, -0.42) : new THREE.Vector3(0.17, -0.16, -0.36);
+// aim down sights: the scoped rifle comes up to the eye, other guns move to the centre
+const GUN_ADS = ST.realistic ? new THREE.Vector3(0, -0.085, -0.3) : new THREE.Vector3(0, -0.2, -0.36);
+const ADS_FOV = ST.realistic ? 34 : 55, BASE_FOV = 75;
+const _gunPos = new THREE.Vector3();
 gun.position.copy(GUN_REST);
 gun.scale.setScalar(ST.realistic ? 0.8 : 0.45);
 gun.rotation.y = -0.04;
 camera.add(gun);
 
-const weapon = { mag: 30, size: 30, reserve: 90, maxReserve: 90, reloadT: 0, fireCd: 0, recoil: 0, shooting: false };
+const weapon = { mag: 30, size: 30, reserve: 90, maxReserve: 90, reloadT: 0, fireCd: 0, recoil: 0, shooting: false, ads: false, adsT: 0 };
+const adsAmount = () => weapon.adsT * weapon.adsT * (3 - 2 * weapon.adsT); // eased 0..1
 
 // ======================================================================
 // GHOSTS
 // ======================================================================
 let ghosts = [];
-const ghostGeo = new THREE.LatheGeometry(
-  [[0, -0.55], [0.42, -0.5], [0.36, -0.3], [0.42, -0.05], [0.4, 0.25], [0.3, 0.45], [0, 0.55]].map(([x, y]) => new THREE.Vector2(x, y)), 18);
-const headGeo = new THREE.SphereGeometry(0.32, 20, 14);
-const eyeGeo = new THREE.SphereGeometry(0.06, 10, 8);
-const eyeMat = ST.eyes === 'glow' ? new THREE.MeshBasicMaterial({ color: glow(ST.eyeGlow, 3) }) : new THREE.MeshBasicMaterial({ color: '#120d1f' });
-const shineMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-const blushMat = new THREE.MeshBasicMaterial({ color: '#ff7eb6' });
-const tailGeo = new THREE.ConeGeometry(0.34, 0.75, 16, 1, true);
-const armGeo = new THREE.SphereGeometry(0.11, 10, 8);
+const FLOAT_Y = 1.0; // how high a ghost's middle floats above the floor
 
-function makeSoldier(haunt, { boss = false, hpMul = 1, speedMul = 1 } = {}) {
-  const g = haunt.obj.ghost, group = new THREE.Group();
-  const S = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.85, metalness: 0.05 });
-  const uni = S(boss ? '#4a2026' : '#26314c'), vest = S('#2a2c30'), dark = S('#16181c'), band = S(haunt.obj.color);
-  uni.emissive = new THREE.Color('#ff2020'); uni.emissiveIntensity = 0;
-  const parts = [];
-  const B = (w, h, d, m, x, y, z, parent = group) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.castShadow = true; parent.add(b); parts.push(b); return b; };
-  const legs = [];
-  for (const s of [-1, 1]) {
-    const hip = new THREE.Group(); hip.position.set(0.12 * s, 0.9, 0); group.add(hip); legs.push(hip);
-    B(0.18, 0.86, 0.2, uni, 0, -0.43, 0, hip); B(0.2, 0.1, 0.28, dark, 0, -0.86, 0.04, hip);
-  }
-  const torso = B(0.5, 0.62, 0.28, uni, 0, 1.22, 0);
-  B(0.54, 0.44, 0.33, vest, 0, 1.26, 0);
-  for (const s of [-1, 1]) {
-    const sh = new THREE.Group(); sh.position.set(0.32 * s, 1.46, 0); sh.rotation.x = -1.25; sh.rotation.z = -0.35 * s; group.add(sh);
-    B(0.14, 0.56, 0.16, uni, 0, -0.26, 0, sh); if (s < 0) B(0.15, 0.08, 0.17, band, 0, -0.08, 0, sh);
-  }
-  B(0.06, 0.09, 0.72, dark, 0.06, 1.34, 0.42);  // rifle
-  const muzzle = new THREE.Object3D(); muzzle.position.set(0.06, 1.34, 0.8); group.add(muzzle);
-  const head = B(0.26, 0.28, 0.26, S('#1b1e24'), 0, 1.7, 0);
-  B(0.31, 0.12, 0.31, S('#20242b'), 0, 1.85, -0.01); // helmet
-  B(0.22, 0.06, 0.03, S('#0a0b0d'), 0, 1.73, 0.135); // goggles
-  const maxHp = g.hp * hpMul * (boss ? 3 : 1);
-  const ghost = { group, body: torso, head, flashMat: uni, legs, soldier: true, name: boss ? `${g.name} (BOSS)` : g.name, hp: maxHp, maxHp,
-    speed: g.speed * speedMul * (boss ? 0.8 : 1), boss, state: 'emerging', t: 0, attackCd: 0, scale: boss ? 1.15 : 1, from: haunt, phase: Math.random() * 6.28,
-    muzzle, sees: false, losT: 0, aimT: 0, shotCd: 1 + Math.random(), burstLeft: 0 };
-  for (const p of parts) { p.userData = { ghost, part: p === head || p.position.y > 1.6 ? 'head' : 'body' }; }
-  const tag = textSprite(null, { width: 512, height: 128, scale: 1.4 }); tag.position.y = 2.2; group.add(tag); ghost.tag = tag; drawTag(ghost);
-  const hp = haunt.mesh.position, dir = new THREE.Vector3(player.pos.x - hp.x, 0, player.pos.z - hp.z).normalize();
-  group.position.set(hp.x + dir.x * (haunt.obj.size[0] / 2 + 0.6), 0, hp.z + dir.z * (haunt.obj.size[2] / 2 + 0.6));
-  group.scale.setScalar(0.01); world.add(group); ghosts.push(ghost); burst(group.position.clone().setY(1), 14); sfx.spawn();
-  return ghost;
-}
-
-function makeGhost(haunt, opts = {}) {
-  if (ST.enemy === 'soldier') return makeSoldier(haunt, opts);
-  const { boss = false, hpMul = 1, speedMul = 1 } = opts;
+function makeGhost(haunt, { boss = false, hpMul = 1, speedMul = 1 } = {}) {
   const g = haunt.obj.ghost;
-  const tint = new THREE.Color(haunt.obj.color).lerp(new THREE.Color('#ffffff'), 0.65);
-  const group = new THREE.Group();
-  const mat = ST.neon
-    ? new THREE.MeshBasicMaterial({ color: glow(tint.clone().lerp(new THREE.Color('#3ef2e0'), 0.6), 0.75), transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false })
-    : toon(tint, { emissive: STYLE === 'night' ? '#6a8cff' : '#7a3cff', emissiveIntensity: STYLE === 'night' ? 0.35 : 0.15, transparent: true, opacity: 0.92 });
-  const body = outline(new THREE.Mesh(ghostGeo, mat), 0.05);
-  const head = outline(new THREE.Mesh(headGeo, mat), 0.06);
-  head.position.y = 0.82;
-  // wispy tail and little floating arms
-  const tail = outline(new THREE.Mesh(tailGeo, mat), 0.04);
-  tail.rotation.x = Math.PI; tail.position.y = -0.85; tail.raycast = () => {};
-  const arms = [];
-  for (const s of [-1, 1]) {
-    const eye = new THREE.Mesh(eyeGeo, eyeMat); eye.scale.set(0.8, 1.4, 0.5); eye.position.set(0.11 * s, 0.86, 0.28); eye.raycast = () => {};
-    const blush = new THREE.Mesh(eyeGeo, blushMat); blush.scale.set(1.2, 0.5, 0.3); blush.position.set(0.19 * s, 0.75, 0.25); blush.raycast = () => {};
-    group.add(eye, blush);
-    if (ST.eyes !== 'glow') {
-      const shine = new THREE.Mesh(eyeGeo, shineMat); shine.scale.setScalar(0.35); shine.position.set(0.11 * s + 0.015, 0.9, 0.31); shine.raycast = () => {};
-      group.add(shine);
-    }
-    const arm = outline(new THREE.Mesh(armGeo, mat), 0.08);
-    arm.scale.set(1, 1.6, 1); arm.position.set(0.48 * s, 0.05, 0.05); arm.raycast = () => {};
-    group.add(arm); arms.push(arm);
-  }
-  group.add(body, head, tail);
+  const m = makeBooGhost({ boss, glow: ST.realistic ? 0.22 : 0.45 });
   const maxHp = g.hp * hpMul * (boss ? 3 : 1);
   const ghost = {
-    group, body, head, name: boss ? `${g.name} (BOSS)` : g.name, hp: maxHp, maxHp,
+    ...m, name: boss ? `${g.name} (BOSS)` : g.name, hp: maxHp, maxHp,
     speed: g.speed * speedMul * (boss ? 0.8 : 1), boss, state: 'emerging', t: 0, attackCd: 0,
-    scale: boss ? 1.7 : 1, from: haunt, phase: Math.random() * 6.28, tail, arms,
+    scale: boss ? 1.6 : 1, from: haunt, phase: Math.random() * 6.28,
+    sees: false, losT: 0, aimT: 0, shotCd: 1 + Math.random(), burstLeft: 0, shadow: makeGhostShadow(),
   };
-  body.userData = { ghost, part: 'body' };
-  head.userData = { ghost, part: 'head' };
-  const tag = textSprite(null, { width: 512, height: 128, scale: boss ? 3.4 : 2.6 });
-  tag.position.y = 1.55;
-  group.add(tag);
-  ghost.tag = tag;
-  drawTag(ghost);
+  m.body.userData = { ghost, part: 'body' };
+  m.head.userData = { ghost, part: 'head' };
+  const tag = textSprite(null, { width: 512, height: 128, scale: 1.5 });
+  tag.position.y = 1.35; m.group.add(tag); ghost.tag = tag; drawTag(ghost);
   const p = haunt.mesh.position;
-  group.position.set(p.x, haunt.obj.size[1], p.z);
-  group.scale.setScalar(0.01);
-  world.add(group);
+  m.group.position.set(p.x, haunt.obj.elevation + haunt.obj.size[1], p.z);
+  m.group.scale.setScalar(0.01);
+  world.add(m.group, ghost.shadow);
   ghosts.push(ghost);
-  sfx.spawn();
+  burst(m.group.position.clone(), 12); sfx.spawn();
   return ghost;
 }
 
@@ -486,12 +473,12 @@ const WAVES = 3;
 
 function startGame() {
   buildWorld(level);
-  ghosts = [];
+  ghosts = []; orbs.length = 0;
   player.pos.set(0, 0, half.z - 1.5);
   player.vel.set(0, 0, 0); player.hp = 100; player.armor = 100; player.dashCd = 0; player.dashT = 0;
   camera.position.set(player.pos.x, EYE, player.pos.z);
   camera.rotation.set(0, 0, 0);
-  Object.assign(weapon, { mag: weapon.size, reserve: weapon.maxReserve, reloadT: 0, fireCd: 0, recoil: 0, shooting: false });
+  Object.assign(weapon, { mag: weapon.size, reserve: weapon.maxReserve, reloadT: 0, fireCd: 0, recoil: 0, shooting: false, ads: false, adsT: 0 });
   game.stats = { shots: 0, hits: 0, heads: 0, kills: 0, start: performance.now() };
   game.wave = 0; game.queue = []; game.betweenT = 1.5; game.running = true; game.paused = false; game.time = 0;
   $('room-tag').textContent = level.room_name.toUpperCase();
@@ -554,11 +541,19 @@ document.addEventListener('keydown', (e) => {
   if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && player.dashCd <= 0) dash();
 });
 document.addEventListener('keyup', (e) => { keys[e.code] = false; });
-document.addEventListener('mousedown', (e) => { if (e.button === 0 && controls.isLocked) weapon.shooting = true; });
-document.addEventListener('mouseup', (e) => { if (e.button === 0) weapon.shooting = false; });
+document.addEventListener('mousedown', (e) => {
+  if (!controls.isLocked) return;
+  if (e.button === 0) weapon.shooting = true;
+  if (e.button === 2) weapon.ads = true;
+});
+document.addEventListener('mouseup', (e) => {
+  if (e.button === 0) weapon.shooting = false;
+  if (e.button === 2) weapon.ads = false;
+});
+document.addEventListener('contextmenu', (e) => { if (game.running) e.preventDefault(); });
 
 controls.addEventListener('unlock', () => {
-  weapon.shooting = false;
+  weapon.shooting = false; weapon.ads = false;
   if (game.running) { game.paused = true; show('pause'); }
 });
 controls.addEventListener('lock', () => { game.paused = false; show('hud'); });
@@ -600,7 +595,7 @@ function fire() {
   setTimeout(() => { flash.visible = false; flashLight.intensity = 0; }, 45);
 
   const moving = moveDir().lengthSq() > 0 || !player.onGround;
-  const spread = (moving ? 0.035 : 0.006) + weapon.recoil * 0.004;
+  const spread = ((moving ? 0.035 : 0.006) + weapon.recoil * 0.004) * (1 - 0.8 * adsAmount());
   ray.setFromCamera(new THREE.Vector2((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread), camera);
   const targets = [...solids.map((s) => s.mesh), ...ghosts.filter((g) => g.state !== 'dead').flatMap((g) => [g.body, g.head])];
   const hit = ray.intersectObjects(targets, false)[0];
@@ -612,7 +607,7 @@ function fire() {
     if (info.ghost) damageGhost(info.ghost, info.part === 'head');
   }
   // camera kick
-  camera.rotation.x = clamp(camera.rotation.x + 0.006, -1.5, 1.5);
+  camera.rotation.x = clamp(camera.rotation.x + 0.006 * (1 - 0.5 * adsAmount()), -1.5, 1.5);
   if (weapon.mag <= 0) reload();
   updateHud();
 }
@@ -623,13 +618,12 @@ function damageGhost(gh, head) {
   if (head) game.stats.heads++;
   (head ? sfx.head : sfx.hit)();
   const hm = $('hitmarker'); hm.className = head ? 'head' : ''; void hm.offsetWidth; hm.classList.add('show');
-  const fm = gh.flashMat || gh.body.material;
-  fm.emissiveIntensity = gh.flashMat ? 0.8 : 1.2;
-  setTimeout(() => { fm.emissiveIntensity = gh.flashMat ? 0 : 0.15; }, 80);
+  gh.flashMat.emissive.set('#ff3048');
+  setTimeout(() => gh.flashMat.emissive.set('#ffffff'), 80);
   drawTag(gh);
   if (gh.hp <= 0) {
     gh.state = 'dead'; gh.t = 0; game.stats.kills++;
-    burst(gh.group.position.clone().setY(gh.soldier ? 1.2 : gh.group.position.y), gh.soldier ? 10 : gh.boss ? 40 : 20);
+    burst(gh.group.position.clone(), gh.boss ? 40 : 20);
     sfx.kill(); feed(gh.name, head);
     weapon.reserve = Math.min(weapon.maxReserve, weapon.reserve + 10); updateHud();
   }
@@ -643,7 +637,6 @@ const tracerMat = new THREE.MeshBasicMaterial({ color: glow(ST.tracer, LOWFX ? 1
 const burstGeo = ST.petals ? new THREE.PlaneGeometry(0.14, 0.09) : new THREE.OctahedronGeometry(0.07);
 const burstMat = new THREE.MeshBasicMaterial({ color: glow(ST.burst, LOWFX ? 1 : 2.5), side: THREE.DoubleSide, transparent: true });
 
-const enemyTracerMat = new THREE.MeshBasicMaterial({ color: glow('#ff5a3c', LOWFX ? 1 : 3), transparent: true });
 
 function tracer(to, from = flash.getWorldPosition(new THREE.Vector3()), mat = tracerMat) {
   const len = from.distanceTo(to);
@@ -702,7 +695,7 @@ function updatePlayer(dt) {
     player.dashT -= dt;
     player.pos.addScaledVector(player.dashDir, 22 * dt);
   } else {
-    player.pos.addScaledVector(dir, SPEED * dt);
+    player.pos.addScaledVector(dir, SPEED * (1 - 0.45 * adsAmount()) * dt);
   }
   player.dashCd = Math.max(0, player.dashCd - dt);
   player.vel.y -= GRAV * dt;
@@ -724,7 +717,22 @@ function updateWeapon(dt) {
     fire();
   }
   weapon.recoil = Math.max(0, weapon.recoil - dt * 6);
-  gun.position.set(GUN_REST.x, GUN_REST.y + weapon.recoil * 0.015, GUN_REST.z + weapon.recoil * 0.06);
+  // aim down sights: ease in about 0.15 s, dropped while reloading or dashing
+  const wantAds = weapon.ads && weapon.reloadT <= 0 && player.dashT <= 0 ? 1 : 0;
+  weapon.adsT = clamp(weapon.adsT + (wantAds ? dt : -dt) * 7, 0, 1);
+  const k = adsAmount();
+  const fov = BASE_FOV + (ADS_FOV - BASE_FOV) * k;
+  if (Math.abs(camera.fov - fov) > 0.01) {
+    camera.fov = fov; camera.updateProjectionMatrix();
+    controls.pointerSpeed = fov / BASE_FOV; // keep aim steady when zoomed in
+  }
+  const scoped = ST.realistic && k > 0.92;
+  gun.visible = !scoped;
+  $('scope').classList.toggle('on', scoped);
+  $('hud').classList.toggle('ads', ST.realistic && k > 0.5); // the scope brings its own reticle
+  _gunPos.lerpVectors(GUN_REST, GUN_ADS, k);
+  gun.rotation.y = -0.04 * (1 - k);
+  gun.position.set(_gunPos.x, _gunPos.y + weapon.recoil * 0.015 * (1 - 0.6 * k), _gunPos.z + weapon.recoil * 0.06 * (1 - 0.5 * k));
   const moving = moveDir().lengthSq() > 0 || !player.onGround;
   document.documentElement.style.setProperty('--spread', `${(moving ? 8 : 0) + weapon.recoil * 6}px`);
 }
@@ -733,75 +741,58 @@ function updateGhosts(dt) {
   for (const gh of ghosts) {
     gh.t += dt;
     const g = gh.group;
-    if (gh.soldier) { updateSoldier(gh, dt); continue; }
     if (gh.state === 'emerging') {
-      const k = Math.min(1, gh.t / 1.1);
+      // rise out of the haunted object and grow to full size
+      const k = Math.min(1, gh.t / 0.9), top = gh.from.obj.elevation + gh.from.obj.size[1];
       g.scale.setScalar(gh.scale * (0.01 + 0.99 * k));
-      g.position.y = gh.from.obj.size[1] + k * 0.9;
+      g.position.y = top + (Math.max(FLOAT_Y, top + 0.3) - top) * k;
       if (k >= 1) gh.state = 'chase';
     } else if (gh.state === 'chase') {
       const to = new THREE.Vector3(player.pos.x - g.position.x, 0, player.pos.z - g.position.z);
-      const dist = to.length();
-      // sway sideways so they are harder to hit (anime-style dodging)
-      const side = new THREE.Vector3(-to.z, 0, to.x).normalize().multiplyScalar(Math.sin(gh.t * 2.2 + gh.phase) * 0.9);
-      if (dist > 1.0) g.position.addScaledVector(to.normalize().add(side).normalize(), gh.speed * dt);
-      g.position.y = 1.0 + Math.sin(gh.t * 3 + gh.phase) * 0.18 + (gh.boss ? 0.4 : 0);
-      gh.tail.rotation.z = Math.sin(gh.t * 5 + gh.phase) * 0.25;
-      gh.arms.forEach((a, k) => { a.position.y = 0.05 + Math.sin(gh.t * 4 + k * 3) * 0.08; });
-      g.lookAt(player.pos.x, g.position.y, player.pos.z);
-      gh.attackCd -= dt;
-      if (dist < 1.3 && gh.attackCd <= 0) {
-        gh.attackCd = 0.9;
-        hurt(gh.boss ? 20 : 12);
+      const dist = to.length(); to.normalize();
+      // line of sight from the sign to the player's chest, rechecked a few times a second
+      gh.losT -= dt;
+      if (gh.losT <= 0) {
+        gh.losT = 0.15;
+        gh.sees = dist < ENEMY_RANGE && canSee(gh.muzzle.getWorldPosition(_muzzle), chest());
       }
+      // with a clear view, hover and drift sideways; otherwise float closer
+      const holding = gh.sees && dist > 3 && dist < 13;
+      const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(Math.sin(gh.t * 1.3 + gh.phase) * (holding ? 1 : 0.7));
+      if (dist > 1.1) {
+        const move = holding ? side.normalize().multiplyScalar(0.4) : to.add(side).normalize();
+        g.position.addScaledVector(move, gh.speed * 0.8 * dt);
+        collide(g.position, 0);
+      }
+      const hover = FLOAT_Y + (gh.boss ? 0.35 : 0);
+      g.position.y += (hover + Math.sin(gh.t * 2.6 + gh.phase) * 0.12 - g.position.y) * Math.min(1, dt * 3);
+      g.rotation.y = Math.atan2(player.pos.x - g.position.x, player.pos.z - g.position.z);
+      g.rotation.z = Math.sin(gh.t * 1.7 + gh.phase) * 0.08;   // lazy sway
+      g.rotation.x = holding ? 0.02 : 0.14;                      // lean in while flying
+      // shake the sign, harder while winding up a throw
+      gh.sign.rotation.z = -0.55 + Math.sin(gh.t * (gh.aimT > 0 ? 22 : 5)) * (gh.aimT > 0 ? 0.16 : 0.07);
+      gh.attackCd -= dt;
+      if (dist < 1.3 && gh.attackCd <= 0) { gh.attackCd = 0.9; hurt(gh.boss ? 20 : 12); }
+      else if (dist >= 1.5) ghostThrow(gh, dist, dt);
     } else if (gh.state === 'dead') {
       g.scale.multiplyScalar(1 + dt * 2);
       g.position.y += dt * 2;
       g.rotation.y += dt * 10;
-      gh.body.material.opacity = Math.max(0, 0.92 - gh.t * 2.2);
-      g.traverse((m) => { if (m.isMesh && m.material !== gh.body.material) m.visible = false; });
-      if (gh.t > 0.45) { world.remove(g); gh.state = 'gone'; }
+      gh.flashMat.transparent = true; gh.flashMat.opacity = Math.max(0, 1 - gh.t * 2.2);
+      g.traverse((m) => { if (m.isMesh && m !== gh.body) m.visible = false; });
+      if (gh.t > 0.45) { world.remove(g, gh.shadow); gh.state = 'gone'; }
     }
+    // the floor shadow shrinks and fades as the ghost rises
+    const lift = Math.max(0, g.position.y - 0.5);
+    gh.shadow.position.set(g.position.x, 0.02, g.position.z);
+    gh.shadow.scale.setScalar(Math.max(0.01, g.scale.x) * (1 - Math.min(0.5, lift * 0.15)));
+    gh.shadow.material.opacity = gh.state === 'dead' ? Math.max(0, 1 - gh.t * 2.2) : 1;
   }
   ghosts = ghosts.filter((g) => g.state !== 'gone');
 }
 
-function updateSoldier(gh, dt) {
-  const g = gh.group;
-  if (gh.state === 'emerging') {
-    const k = Math.min(1, gh.t / 0.6); g.scale.setScalar(gh.scale * (0.01 + 0.99 * k));
-    if (k >= 1) gh.state = 'chase';
-  } else if (gh.state === 'chase') {
-    const to = new THREE.Vector3(player.pos.x - g.position.x, 0, player.pos.z - g.position.z);
-    const dist = to.length(); to.normalize();
-    // line of sight from the rifle to the player's chest, rechecked a few times a second
-    gh.losT -= dt;
-    if (gh.losT <= 0) {
-      gh.losT = 0.15;
-      gh.sees = dist < SOLDIER_RANGE && canSee(gh.muzzle.getWorldPosition(_muzzle), chest());
-    }
-    // with a clear shot, hold position and strafe; otherwise keep closing in
-    const holding = gh.sees && dist > 3 && dist < 14;
-    const side = new THREE.Vector3(-to.z, 0, to.x).multiplyScalar(Math.sin(gh.t * 1.3 + gh.phase) * (holding ? 1 : 0.7));
-    if (dist > 1.1) {
-      const move = holding ? side.normalize().multiplyScalar(0.35) : to.add(side).normalize();
-      g.position.addScaledVector(move, gh.speed * 0.8 * dt);
-      collide(g.position, 0);
-      gh.legs[0].rotation.x = Math.sin(gh.t * 9) * 0.55 * (holding ? 0.4 : 1); gh.legs[1].rotation.x = -gh.legs[0].rotation.x;
-    }
-    g.rotation.y = Math.atan2(player.pos.x - g.position.x, player.pos.z - g.position.z);
-    gh.attackCd -= dt;
-    if (dist < 1.5 && gh.attackCd <= 0) { gh.attackCd = 0.9; hurt(gh.boss ? 20 : 12); }
-    else if (dist >= 1.5) soldierShoot(gh, dist, dt);
-  } else if (gh.state === 'dead') {
-    g.rotation.x = -Math.min(1, gh.t / 0.35) * Math.PI / 2;
-    if (gh.t > 1.6) g.position.y -= dt * 0.6;
-    if (gh.t > 2.6) { world.remove(g); gh.state = 'gone'; }
-  }
-}
-
-// soldiers aim for a moment once they see you, then fire short bursts
-const SOLDIER_RANGE = 22;
+// ghosts wind up for a moment once they see you, then throw short volleys of spirit orbs
+const ENEMY_RANGE = 22, ORB_SPEED = 13;
 const losRay = new THREE.Raycaster();
 const _muzzle = new THREE.Vector3(), _chest = new THREE.Vector3(), _losDir = new THREE.Vector3();
 function chest() { return _chest.set(player.pos.x, player.pos.y + 1.2, player.pos.z); }
@@ -811,27 +802,47 @@ function canSee(from, to) {
   return losRay.intersectObjects(solids.map((s) => s.mesh), false).length === 0;
 }
 
-function soldierShoot(gh, dist, dt) {
+function ghostThrow(gh, dist, dt) {
   gh.shotCd -= dt;
   if (!gh.sees) { gh.aimT = 0; gh.burstLeft = 0; return; }
   gh.aimT += dt;
   if (gh.aimT < 0.5 || gh.shotCd > 0) return;
   if (gh.burstLeft <= 0) gh.burstLeft = 3;
   gh.burstLeft--;
-  gh.shotCd = gh.burstLeft > 0 ? 0.12 : (gh.boss ? 1.0 : 1.6 + Math.random() * 0.8);
-
-  // harder to hit at range, while moving, and much harder mid-dash
-  let chance = 0.6 - dist * 0.02;
+  gh.shotCd = gh.burstLeft > 0 ? 0.18 : (gh.boss ? 1.1 : 1.7 + Math.random() * 0.8);
+  // aimed orbs are tighter up close and while you stand still; a dash makes most of them miss
+  let chance = 0.75 - dist * 0.02;
   if (player.dashT > 0) chance *= 0.3;
-  else if (moveDir().lengthSq() > 0 || !player.onGround) chance *= 0.55;
   const from = gh.muzzle.getWorldPosition(new THREE.Vector3()), target = chest().clone();
+  if (Math.random() > clamp(chance, 0.1, 0.75)) {
+    target.add(new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.3, Math.random() - 0.5).normalize().multiplyScalar(1.2 + Math.random()));
+  }
   sfx.enemyShot();
-  if (Math.random() < clamp(chance, 0.08, 0.6)) {
-    tracer(target, from, enemyTracerMat);
-    hurt(gh.boss ? 8 : 5);
-  } else {
-    const miss = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.3, Math.random() - 0.5).normalize().multiplyScalar(0.7 + Math.random() * 0.6);
-    tracer(target.add(miss).sub(from).setLength(dist + 6).add(from), from, enemyTracerMat);
+  throwOrb(from, target, gh.boss ? 8 : 5);
+}
+
+// spirit orbs fly for real, so stepping aside dodges them
+const orbs = [];
+const orbGeo = new THREE.SphereGeometry(0.09, 12, 10);
+const orbMat = new THREE.MeshBasicMaterial({ color: glow('#9fe8ff', LOWFX ? 1 : 3.5) });
+const orbHaloMat = new THREE.MeshBasicMaterial({ color: glow('#9fe8ff', 1.4), transparent: true, opacity: 0.35, depthWrite: false });
+function throwOrb(from, to, dmg) {
+  const m = new THREE.Mesh(orbGeo, orbMat); m.raycast = () => {};
+  const halo = new THREE.Mesh(orbGeo, orbHaloMat); halo.scale.setScalar(2); halo.raycast = () => {}; m.add(halo);
+  m.position.copy(from);
+  const dir = to.clone().sub(from), len = dir.length();
+  world.add(m);
+  orbs.push({ m, dir: dir.divideScalar(len), left: len + 4, dmg });
+}
+function updateOrbs(dt) {
+  for (let i = orbs.length - 1; i >= 0; i--) {
+    const o = orbs[i], step = ORB_SPEED * dt;
+    o.m.position.addScaledVector(o.dir, step); o.left -= step;
+    o.m.rotation.y += dt * 8;
+    let done = o.left <= 0;
+    if (!done && o.m.position.distanceTo(chest()) < 0.55) { hurt(o.dmg); done = true; }
+    if (!done) for (const { box } of solids) if (box.containsPoint(o.m.position)) { done = true; break; }
+    if (done) { world.remove(o.m); orbs.splice(i, 1); }
   }
 }
 
@@ -915,7 +926,7 @@ function drawRadar() {
   // floor, then objects and walls as seen from above
   radar.fillStyle = '#ffffff10';
   radar.fillRect(-half.x, -half.z, half.x * 2, half.z * 2);
-  const haunted = new Set(haunts.map((h) => h.mesh));
+  const haunted = new Set(haunts.map((h) => h.collider));
   for (const { box, mesh } of solids) {
     if (box.max.y - box.min.y < 0.05) continue; // the floor
     radar.fillStyle = haunted.has(mesh) ? '#ff7eb666' : '#c9d3df40';
@@ -975,6 +986,7 @@ function loop(now) {
     updateWaves(dt);
     updateSparks(dt);
     updateFx(dt);
+    updateOrbs(dt);
     worldUpdate(dt, game.time);
     $('ability').classList.toggle('cool', player.dashCd > 0);
     $('dash-ring').style.height = (player.dashCd / 3) * 100 + '%';
@@ -1126,6 +1138,6 @@ if (!levelFromHash()) {
 
 // handy for testing in the browser console
 function step(dt) { // one logic tick without drawing (used by automated tests)
-  game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt); updateFx(dt); worldUpdate(dt, game.time); drawRadar();
+  game.time += dt; updatePlayer(dt); updateWeapon(dt); updateHaunts(dt); updateGhosts(dt); updateWaves(dt); updateSparks(dt); updateFx(dt); updateOrbs(dt); worldUpdate(dt, game.time); drawRadar();
 }
 window.phantom = { game, player, camera, weapon, burst, STYLE, perf, renderer, get ghosts() { return ghosts; }, get solids() { return solids; }, nextWave, startGame, cleanLevel, step };
